@@ -6,4 +6,6 @@ pub mod elements;
 pub mod gpu_data;
 pub mod experiments;
 pub mod genetic;
-pub mod shader_gen; // Export shader generator
+pub mod shader_gen;
+pub mod metals; // New metals module
+pub mod materials_data; // New materials data module

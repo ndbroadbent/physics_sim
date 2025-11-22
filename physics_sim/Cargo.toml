@@ -35,6 +35,10 @@ path = "src/main_genetic_v2.rs"
 name = "physics_genetic_v3"
 path = "src/main_genetic_v3.rs"
 
+[[bin]]
+name = "physics_materials"
+path = "src/main_materials.rs"
+
 [dependencies]
 bytemuck = { version = "1.24.0", features = ["derive"] }
 env_logger = "0.11.8"
