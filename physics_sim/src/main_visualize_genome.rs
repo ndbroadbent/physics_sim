@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use wgpu::util::DeviceExt;
-// use physics_sim::genetic::Genome; // Unused
+use physics_sim::genetic::Genome;
 use image::{ImageBuffer, Rgba};
 
 // Uniforms struct (Rust side) must match WGSL
@@ -35,7 +35,7 @@ async fn run_headless() -> Result<()> {
     let instance = wgpu::Instance::default();
     let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions::default())
         .await
-        .expect("Failed to find an appropriate adapter"); // Simply expect the Option/Result to be valid
+        .expect("Failed to find an appropriate adapter");
 
     let (device, queue) = adapter.request_device(
         &wgpu::DeviceDescriptor {
@@ -85,12 +85,12 @@ async fn run_headless() -> Result<()> {
     let shader = device.create_shader_module(wgpu::include_wgsl!("render_shader.wgsl"));
 
     // Camera setup: Look at the "Block" from a distance
-    // Move camera back to z=40, y=20 to look down at the 20x20x20 block
+    // Move camera back to z=60, y=30 to look down at the block
     let uniforms_data = Uniforms {
         resolution: [width as f32, height as f32],
         time: 0.0,
         _pad1: 0.0,
-        camera_pos: [40.0, 30.0, 60.0], // Pulled back and up
+        camera_pos: [40.0, 30.0, 60.0], 
         _pad2: 0.0,
         camera_target: [0.0, 0.0, 0.0], // Look at center
         _pad3: 0.0,
@@ -205,8 +205,6 @@ async fn run_headless() -> Result<()> {
     }
 
     // 6. Copy to Buffer
-    // Check if we need TexelCopy or ImageCopy based on version. 
-    // Assuming wgpu 27 has TexelCopy based on previous error.
     encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {
             aspect: wgpu::TextureAspect::All,
@@ -243,13 +241,13 @@ async fn run_headless() -> Result<()> {
     for y in 0..height {
         for x in 0..width {
             let buffer_index = (y * padded_bytes_per_row + x * 4) as usize;
-            // Copy row by row to handle padding if necessary
             if buffer_index < data.len() {
                 let r = data[buffer_index];
                 let g = data[buffer_index + 1];
                 let b = data[buffer_index + 2];
                 let a = data[buffer_index + 3];
-                img_buf.put_pixel(x, y, Rgba([r, g, b, a]));
+                // Flip Y here to correct orientation
+                img_buf.put_pixel(x, height - 1 - y, Rgba([r, g, b, a]));
             }
         }
     }

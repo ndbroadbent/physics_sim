@@ -253,7 +253,12 @@ async fn main() {
             let results: &[GpuMagneticParticle] = bytemuck::cast_slice(&data);
             
             let total_flow: f32 = results.iter().map(|p| p.properties[0]).sum();
-            fitness_scores[idx] = total_flow;
+            // Sanitize NaN/Inf
+            fitness_scores[idx] = if total_flow.is_nan() || total_flow.is_infinite() {
+                -1.0 // Penalize broken physics
+            } else {
+                total_flow
+            };
             
             // Cleanup (Drop mapped range)
             drop(data);
@@ -262,7 +267,7 @@ async fn main() {
 
         // --- Breeding ---
         let mut sorted_indices: Vec<usize> = (0..POPULATION_SIZE).collect();
-        sorted_indices.sort_by(|&a, &b| fitness_scores[b].partial_cmp(&fitness_scores[a]).unwrap());
+        sorted_indices.sort_by(|&a, &b| fitness_scores[b].partial_cmp(&fitness_scores[a]).unwrap_or(std::cmp::Ordering::Equal));
         
         println!("  Best Flow: {:.4}", fitness_scores[sorted_indices[0]]);
         

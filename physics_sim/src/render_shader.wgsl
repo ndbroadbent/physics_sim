@@ -8,37 +8,13 @@ struct VertexOutput {
 struct Uniforms {
     resolution: vec2<f32>,
     time: f32,
-    // Padding in Rust struct aligns these, but in WGSL explicit alignment rules apply.
-    // Rust: res(8) + time(4) + pad(4) = 16.
-    // Cam pos(12) + target(12) + up(12) + pad(12??)
-    // Let's check Rust layout:
-    // res: [f32; 2] (8 bytes)
-    // time: f32 (4 bytes)
-    // -- gap 4 bytes -- (implicit in C repr if next field is vec3/16-byte aligned? No, f32 array is 4-byte aligned)
-    // cam_pos: [f32; 3] (12 bytes)
-    // cam_target: [f32; 3] (12 bytes)
-    // cam_up: [f32; 3] (12 bytes)
-    // genome: [f32; 16] (64 bytes)
-    // padding: [f32; 2] (8 bytes)
-    
-    // To be safe, let's use vec4s for everything in WGSL to match 16-byte chunks if possible, 
-    // OR just fix the array alignment.
-    
-    // Simplest Fix: Treat genome as vec4 array.
+    _pad1: f32, // Align to 16 bytes
     camera_pos: vec3<f32>,
+    _pad2: f32, // Align vec3 to 16 bytes
     camera_target: vec3<f32>,
+    _pad3: f32, // Align vec3 to 16 bytes
     camera_up: vec3<f32>,
-    
-    // We need to be careful with alignment between Rust and WGSL.
-    // Uniforms are std140 layout.
-    // vec3 is 16-byte aligned/strided in std140.
-    // So Rust [f32; 3] needs padding to 16 bytes if mapped to vec3.
-    // But our Rust struct is `repr(C)`.
-    
-    // Let's assume the Rust struct is tightly packed floats.
-    // WGSL `uniform` buffer expects specific alignment.
-    // Ideally, we should update Rust struct to use `[f32; 4]` for positions.
-    
+    _pad4: f32, // Align vec3 to 16 bytes
     genome_params: array<vec4<f32>, 4>, 
 };
 
@@ -62,10 +38,22 @@ fn rotY(p: vec3<f32>, a: f32) -> vec3<f32> {
     return vec3<f32>(c * p.x + s * p.z, p.y, -s * p.x + c * p.z);
 }
 
+// --- Primitives ---
+
 // Box
 fn sdBox(p: vec3<f32>, b: vec3<f32>) -> f32 {
     let q = abs(p) - b;
     return length(max(q, vec3<f32>(0.0))) + min(max(q.x, max(q.y, q.z)), 0.0);
+}
+
+// Sphere
+fn sdSphere(p: vec3<f32>, s: f32) -> f32 {
+    return length(p) - s;
+}
+
+// Plane (Floor)
+fn sdPlane(p: vec3<f32>, height: f32) -> f32 {
+    return p.y - height;
 }
 
 // --- Fractal Generation ---
@@ -94,50 +82,12 @@ fn sdFractalChannel(pos: vec3<f32>, genes_array: array<vec4<f32>, 4>) -> f32 {
     return d; 
 }
 
-// --- New: Sawtooth Ratchet Primitive ---
-// Matches genetic_sim.wgsl logic
-fn sdSawtoothRatchet(p_in: vec3<f32>, genes_array: array<vec4<f32>, 4>) -> f32 {
-    var p = p_in;
-    // p.x = p.x % 5.0; // Repeat every 5 units in X. WGSL mod is different? 
-    // Use fract for repetition: 
-    // x = fract(x / 5.0) * 5.0;
-    // But standard mod should work? Let's implement manual repeat.
-    let repeat = 5.0;
-    p.x = p.x - repeat * floor(p.x / repeat);
-    
-    let tooth_height = get_gene(0, genes_array) * 4.0 + 1.0; // Gene 0: height (1 to 5)
-    let tooth_angle = get_gene(1, genes_array) * 0.5 + 0.1; // Gene 1: angle (small bias)
-    let wall_thickness = 0.5;
-
-    // A single V-shape.
-    // Shift p to make the origin at the tip of the V
-    p.x -= 2.5;
-    p.y -= tooth_height; 
-
-    // Rotate the space to align with one side of the V
-    // let a = atan2(p.y, p.x); // Unused
-    // let l = length(p.xy); // Unused
-    
-    // Define the V-shape using two planes
-    // Angle 1
-    let d1 = dot(p.xy, vec2<f32>(cos(tooth_angle), sin(tooth_angle)));
-    // Angle 2 (negative of angle 1, to make the V)
-    let d2 = dot(p.xy, vec2<f32>(cos(-tooth_angle), sin(-tooth_angle)));
-
-    // Combined shape
-    let d_v = max(d1, d2) - wall_thickness; // Extrude into a V
-    
-    // Subtract a flat base
-    let base = p.y + tooth_height; // Distance to the floor
-    
-    return max(d_v, -base); // The shape is the V, constrained by the floor
-}
 
 // Main evaluation function
 fn map_geometry(p: vec3<f32>, genes_array: array<vec4<f32>, 4>) -> f32 {
-    // Switch back to fractal for interesting visuals
-    return sdFractalChannel(p, genes_array);
-    // return sdSawtoothRatchet(p, genes_array);
+    let fractal_dist = sdFractalChannel(p - vec3<f32>(0.0, 10.0, 0.0), genes_array); // Lift fractal up by 10
+    let floor_dist = sdPlane(p, -10.0); // Floor at y = -10
+    return min(fractal_dist, floor_dist);
 }
 
 // --- Raymarching ---
@@ -206,11 +156,38 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if (t > 0.0) {
         let p = ro + rd * t;
         let normal = get_normal(p, uniforms.genome_params);
-        let light_dir = normalize(vec3<f32>(0.5, 0.5, -1.0)); // Simple light
+        let light_dir = normalize(vec3<f32>(0.5, 0.8, -0.5)); // Sunlight from top-right
+        
+        // Basic Lambertian diffuse
         let diffuse = max(dot(normal, light_dir), 0.0);
-        let color = vec3<f32>(0.2, 0.5, 0.8) * diffuse + vec3<f32>(0.1); // Blue-ish shaded
+        
+        // Shadow ray (simple hard shadow)
+        var shadow = 1.0;
+        if (ray_march(p + normal * 0.01, light_dir, uniforms.genome_params) > 0.0) {
+            shadow = 0.3; // In shadow
+        }
+
+        // Material Color
+        var material_color = vec3<f32>(0.7, 0.7, 0.7); // Grey default
+        if (p.y < -9.9) { 
+            // Floor pattern (checkerboard)
+            let f = floor(p.x * 0.5) + floor(p.z * 0.5);
+            if ((f % 2.0) == 0.0) {
+                material_color = vec3<f32>(0.3, 0.3, 0.3); // Dark tile
+            } else {
+                material_color = vec3<f32>(0.4, 0.4, 0.4); // Light tile
+            }
+        } else {
+            // Fractal color (Genetic Nano-Machine Blue)
+            material_color = vec3<f32>(0.2, 0.6, 0.9);
+        }
+
+        let color = material_color * diffuse * shadow + vec3<f32>(0.05); // Ambient
         return vec4<f32>(color, 1.0);
     } else {
-        return vec4<f32>(0.1, 0.1, 0.2, 1.0); // Background color
+        // Sky Gradient
+        let t_sky = 0.5 * (rd.y + 1.0);
+        let sky_color = mix(vec3<f32>(0.6, 0.7, 0.8), vec3<f32>(0.1, 0.2, 0.4), t_sky); // Horizon to Zenith
+        return vec4<f32>(sky_color, 1.0);
     }
 }
