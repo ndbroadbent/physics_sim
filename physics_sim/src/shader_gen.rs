@@ -28,8 +28,8 @@ pub enum TransformOp {
 impl SdfOp {
     pub fn random(depth: u32) -> Self {
         let mut rng = rand::rng();
-        // Force structure if depth is high
-        if depth == 0 || (depth < 3 && rng.random_bool(0.2)) {
+        // Force structure: Only allow terminals if depth is 0, or very small chance otherwise.
+        if depth == 0 || (depth < 3 && rng.random_bool(0.1)) { // Reduced terminal chance
             if rng.random_bool(0.5) {
                 SdfOp::Box([rng.random_range(0.5..2.0), rng.random_range(0.5..2.0), rng.random_range(0.5..2.0)])
             } else {
@@ -64,18 +64,16 @@ impl SdfOp {
             SdfOp::Subtract(a, b) => format!("max({}, -({}))", a.to_wgsl(p_var), b.to_wgsl(p_var)),
             SdfOp::SmoothUnion(a, b, k) => format!("min({}, {}) - {:.4}", a.to_wgsl(p_var), b.to_wgsl(p_var), k * 0.1), // Hacky smin approx
             SdfOp::Transform(t, child) => {
-                let new_p = match **t {
-                    TransformOp::RotateY(a) => format!("rotY({}, {:.4})", p_var, a),
-                    TransformOp::Translate(v) => format!("({} - vec3<f32>({:.4}, {:.4}, {:.4}))", p_var, v[0], v[1], v[2]),
-                    TransformOp::Scale(s) => format!("({} / {:.4})", p_var, s),
-                    TransformOp::Repeat(c) => format!("(fract({} / {:.4}) * {:.4} - {:.4} * 0.5)", p_var, c, c, c),
-                    TransformOp::Twist(k) => format!("rotY({}, {}.y * {:.4})", p_var, p_var, k), // Simple Y-axis twist
-                    TransformOp::Fold(k) => format!("(abs({}) - vec3<f32>({:.4}, {:.4}, {:.4}))", p_var, k[0], k[1], k[2]),
+                let (transformed_p_expr, scale_factor_applied_to_distance) = match **t {
+                    TransformOp::RotateY(a) => (format!("rotY({}, {:.4})", p_var, a), 1.0),
+                    TransformOp::Translate(v) => (format!("({} - vec3<f32>({:.4}, {:.4}, {:.4}))", p_var, v[0], v[1], v[2]), 1.0),
+                    TransformOp::Scale(s) => (format!("({} / {:.4})", p_var, s), s), // Scale 'p' and apply inverse scale to distance
+                    TransformOp::Repeat(c) => (format!("(fract({} / {:.4}) * {:.4} - {:.4} * 0.5)", p_var, c, c, c), 1.0),
+                    TransformOp::Twist(k) => (format!("rotY({}, {}.y * {:.4})", p_var, p_var, k), 1.0),
+                    TransformOp::Fold(k) => (format!("(abs({}) - vec3<f32>({:.4}, {:.4}, {:.4}))", p_var, k[0], k[1], k[2]), 1.0),
                 };
-                match **t {
-                    TransformOp::Scale(s) => format!("({} * {:.4})", child.to_wgsl(&new_p), s),
-                    _ => child.to_wgsl(&new_p),
-                }
+                let child_sdf = child.to_wgsl(&transformed_p_expr);
+                format!("({} * {:.4})", child_sdf, scale_factor_applied_to_distance) 
             }
         }
     }

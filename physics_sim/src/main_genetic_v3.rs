@@ -3,12 +3,15 @@ use physics_sim::gpu_data::{GpuMagneticParticle, GeneticSimParams};
 use wgpu::util::DeviceExt;
 use rand::Rng;
 use rand::seq::SliceRandom;
+use std::fs; // For saving/loading genomes
+use std::path::Path; // For file paths
 
 // Genetic Algorithm Parameters
-const POPULATION_SIZE: usize = 20; // Smaller population because compilation is heavy
+const POPULATION_SIZE: usize = 50; // Scaled up
 const PARTICLES_PER_CHAMBER: usize = 1000;
-const GENERATIONS: usize = 10;
-const MUTATION_RATE: f32 = 0.3; // Higher mutation for tree structure
+const GENERATIONS: usize = 20; // Longer run
+const MUTATION_RATE: f32 = 0.4; // High mutation
+const INITIAL_TREE_DEPTH: u32 = 5; // Deeper initial trees
 
 // Simulation Parameters
 const CHAMBER_DIMS: [f32; 3] = [30.0, 30.0, 30.0];
@@ -147,9 +150,10 @@ async fn main() {
     }).await.unwrap();
 
     // Initial Population of Trees
-    let mut population: Vec<SdfOp> = (0..POPULATION_SIZE).map(|_| SdfOp::random(4)).collect();
+    let mut population: Vec<SdfOp> = (0..POPULATION_SIZE).map(|_| SdfOp::random(INITIAL_TREE_DEPTH)).collect();
     let mut fitness_scores: Vec<f32> = vec![0.0; POPULATION_SIZE];
-    let mut best_code = String::new();
+    let mut best_code = String::new(); // Stores the WGSL source of the best
+    let mut best_sdf_op: SdfOp = population[0].clone(); // Stores the SdfOp tree of the best
     let mut best_fitness = -1.0;
 
     let mut rng = rand::rng();
@@ -298,4 +302,14 @@ async fn main() {
     
     println!("\n--- Evolution Complete ---");
     println!("Best WGSL Code found:\n{}", best_code);
+
+    // Save the best genome SdfOp to a JSON file
+    let genes_dir = Path::new("genes");
+    if !genes_dir.exists() {
+        fs::create_dir(genes_dir).unwrap();
+    }
+    let best_genome_path = genes_dir.join("best_genome.json");
+    let best_genome_json = serde_json::to_string_pretty(&best_sdf_op).unwrap();
+    fs::write(&best_genome_path, best_genome_json).unwrap();
+    println!("Best SdfOp saved to genes/best_genome.json");
 }

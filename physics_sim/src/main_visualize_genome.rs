@@ -1,7 +1,9 @@
 use anyhow::{anyhow, Result};
 use wgpu::util::DeviceExt;
-use physics_sim::genetic::Genome;
 use image::{ImageBuffer, Rgba};
+use std::fs;
+use std::path::PathBuf;
+use physics_sim::shader_gen::SdfOp; // Import SdfOp
 
 // Uniforms struct (Rust side) must match WGSL
 #[repr(C)]
@@ -16,22 +18,35 @@ struct Uniforms {
     _pad3: f32, // Align vec3 to 16 bytes
     camera_up: [f32; 3],
     _pad4: f32, // Align vec3 to 16 bytes
-    genome_params: [f32; 16], 
 }
 
 async fn run_headless() -> Result<()> {
-    // Hardcoded best genome from the previous run
-    let best_genome_genes: [f32; 16] = [
-        0.7704699, 0.006599307, 0.14029002, 0.77480626, 0.14399093, 
-        0.6627429, 0.73306084, 0.1451807, 0.106321275, 0.851491, 
-        0.41654706, 0.87280214, 0.9913798, 0.35109216, 0.08714211, 0.8621229
-    ];
+    // 1. Load the best SdfOp tree from JSON
+    let genes_dir = PathBuf::from("genes");
+    let best_genome_path = genes_dir.join("best_genome.json");
+
+    let best_genome_json = fs::read_to_string(&best_genome_path)
+        .map_err(|e| anyhow!("Failed to read best_genome.json: {}", e))?;
+    let best_sdf_op: SdfOp = serde_json::from_str(&best_genome_json)
+        .map_err(|e| anyhow!("Failed to deserialize best_sdf_op: {}", e))?;
+
+    // 2. Generate the WGSL code for the map_geometry function
+    let generated_geometry_code = best_sdf_op.to_wgsl("p");
+
+    // 3. Assemble the full shader source dynamically
+    let render_shader_template = fs::read_to_string("src/render_shader.wgsl")
+        .map_err(|e| anyhow!("Failed to read render_shader.wgsl template: {}", e))?;
     
+    let full_shader_source = render_shader_template.replace(
+        "// INSERT_GENERATED_CODE_HERE",
+        &format!("    return {};", generated_geometry_code)
+    );
+
     // Dimensions for the output image
     let width = 1920;
     let height = 1080;
 
-    // 1. Setup WGPU (Headless)
+    // 4. Setup WGPU (Headless)
     let instance = wgpu::Instance::default();
     let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions::default())
         .await
@@ -47,7 +62,7 @@ async fn run_headless() -> Result<()> {
         },
     ).await?;
 
-    // 2. Create Output Texture
+    // 5. Create Output Texture
     let texture_desc = wgpu::TextureDescriptor {
         size: wgpu::Extent3d {
             width,
@@ -65,9 +80,7 @@ async fn run_headless() -> Result<()> {
     let texture = device.create_texture(&texture_desc);
     let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-    // 3. Create Output Buffer (to read back to CPU)
-    // Align width to 256 bytes for buffer copy
-    let u32_size = std::mem::size_of::<u32>() as u32;
+    // 6. Create Output Buffer (to read back to CPU)
     let align = 256;
     let unpadded_bytes_per_row = width * 4;
     let padding = (align - unpadded_bytes_per_row % align) % align;
@@ -81,22 +94,25 @@ async fn run_headless() -> Result<()> {
         mapped_at_creation: false,
     });
 
-    // 4. Setup Shader and Uniforms
-    let shader = device.create_shader_module(wgpu::include_wgsl!("render_shader.wgsl"));
+    // 7. Compile the dynamically generated shader
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Render Shader (Dynamic)"),
+        source: wgpu::ShaderSource::Wgsl(full_shader_source.into()),
+    });
 
     // Camera setup: Look at the "Block" from a distance
-    // Move camera back to z=60, y=30 to look down at the block
+    // Move camera closer to z=3, y=1.5 (2x zoom in)
     let uniforms_data = Uniforms {
         resolution: [width as f32, height as f32],
         time: 0.0,
         _pad1: 0.0,
-        camera_pos: [40.0, 30.0, 60.0], 
+        camera_pos: [2.0, 1.5, 3.0], 
         _pad2: 0.0,
         camera_target: [0.0, 0.0, 0.0], // Look at center
+
         _pad3: 0.0,
         camera_up: [0.0, 1.0, 0.0],
         _pad4: 0.0,
-        genome_params: best_genome_genes,
     };
 
     let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -157,10 +173,11 @@ async fn run_headless() -> Result<()> {
             })],
             compilation_options: Default::default(),
         }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleStrip,
-            strip_index_format: None,
-            front_face: wgpu::FrontFace::Ccw,
+                    primitive: wgpu::PrimitiveState {
+                        topology: wgpu::PrimitiveTopology::TriangleList,
+                        strip_index_format: None,
+                        front_face: wgpu::FrontFace::Ccw,
+        
             cull_mode: Some(wgpu::Face::Back),
             polygon_mode: wgpu::PolygonMode::Fill,
             unclipped_depth: false,
@@ -176,7 +193,7 @@ async fn run_headless() -> Result<()> {
         cache: None,
     });
 
-    // 5. Render
+    // 8. Render
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("Render Encoder"),
     });
@@ -199,12 +216,11 @@ async fn run_headless() -> Result<()> {
             timestamp_writes: None,
             occlusion_query_set: None,
         });
-        render_pass.set_pipeline(&render_pipeline);
-        render_pass.set_bind_group(0, &bind_group, &[]);
-        render_pass.draw(0..4, 0..1);
-    }
-
-    // 6. Copy to Buffer
+                    render_pass.set_pipeline(&render_pipeline);
+                    render_pass.set_bind_group(0, &bind_group, &[]);
+                    render_pass.draw(0..6, 0..1);
+            }
+            // 9. Copy to Buffer
     encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {
             aspect: wgpu::TextureAspect::All,
@@ -225,7 +241,7 @@ async fn run_headless() -> Result<()> {
 
     queue.submit(Some(encoder.finish()));
 
-    // 7. Map and Save
+    // 10. Map and Save
     let buffer_slice = output_buffer.slice(..);
     let (sender, receiver) = tokio::sync::oneshot::channel();
     buffer_slice.map_async(wgpu::MapMode::Read, move |v| sender.send(v).unwrap());
