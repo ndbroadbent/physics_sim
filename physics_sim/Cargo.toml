@@ -15,6 +15,10 @@ path = "src/main_gpu.rs"
 name = "physics_genetic"
 path = "src/main_genetic.rs"
 
+[[bin]]
+name = "visualize_genome"
+path = "src/main_visualize_genome.rs"
+
 [dependencies]
 bytemuck = { version = "1.24.0", features = ["derive"] }
 env_logger = "0.11.8"
@@ -26,3 +30,4 @@ rand = "0.9.2"
 wgpu = "27.0.1"
 winit = "0.30.12"
 tokio = { version = "1", features = ["full"] }
+anyhow = "1.0.100"

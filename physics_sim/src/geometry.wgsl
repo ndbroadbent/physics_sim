@@ -61,3 +61,12 @@ fn map_geometry(p: vec3<f32>, genes: Genome) -> f32 {
     // Gene 5: Select primitive or fractal type? For now, hardcode fractal.
     return sdFractalChannel(p, genes);
 }
+
+// Function to calculate surface normal
+fn get_normal(p: vec3<f32>, genes: Genome) -> vec3<f32> {
+    let eps = 0.001;
+    let normal_x = map_geometry(p + vec3<f32>(eps, 0.0, 0.0), genes) - map_geometry(p - vec3<f32>(eps, 0.0, 0.0), genes);
+    let normal_y = map_geometry(p + vec3<f32>(0.0, eps, 0.0), genes) - map_geometry(p - vec3<f32>(0.0, eps, 0.0), genes);
+    let normal_z = map_geometry(p + vec3<f32>(0.0, 0.0, eps), genes) - map_geometry(p - vec3<f32>(0.0, 0.0, eps), genes);
+    return normalize(vec3<f32>(normal_x, normal_y, normal_z));
+}
