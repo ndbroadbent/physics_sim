@@ -1,14 +1,14 @@
 use physics_sim::gpu_data::{GpuParticle, SimParams};
-use physics_sim::experiments::{ExperimentConfig, ExperimentResult};
+use physics_sim::experiments::{ExperimentConfig, ExperimentResult, LayerDef};
 use physics_sim::elements::{Element, MaterialDef};
 use wgpu::util::DeviceExt;
 use std::time::Instant;
 
-    // Constants for simulation
+// Constants
 const SIM_WIDTH: u32 = 800;
 const SIM_HEIGHT: u32 = 200;
-const PHOTON_INITIAL_ENERGY_EV: f64 = 2.5;
-const NUM_PARTICLES: usize = 100_000; // Reduced particle count for faster prototyping
+const PHOTON_INITIAL_ENERGY_EV: f64 = 2.5; // Blue-ish light
+const NUM_PARTICLES: usize = 100_000;
 const WORKGROUP_SIZE: u32 = 64;
 
 async fn run_gpu_simulation(
@@ -18,10 +18,14 @@ async fn run_gpu_simulation(
 ) -> ExperimentResult {
     println!("Running experiment: {}", config.name);
 
+    // 1. Prepare Particles
     let mut initial_data = Vec::with_capacity(config.photon_count);
     for _ in 0..config.photon_count {
         let y = rand::random::<f32>() * config.sim_height as f32; 
-        initial_data.push(GpuParticle::new_photon(0.0, y, config.photon_energy_ev as f32));
+        // Spectrum: For multi-junction, we need broad spectrum!
+        // Let's randomize energy between 0.5 eV (IR) and 3.5 eV (UV)
+        let energy = 0.5 + rand::random::<f32>() * 3.0; 
+        initial_data.push(GpuParticle::new_photon(0.0, y, energy));
     }
 
     let particle_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -30,22 +34,43 @@ async fn run_gpu_simulation(
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
     });
 
-    let sim_params = SimParams {
+    // 2. Map Layers to SimParams
+    let mut sim_params = SimParams {
         width: config.sim_width as f32,
         height: config.sim_height as f32,
         atom_density: config.atom_density as f32,
-        band_gap: config.host_material.band_gap as f32,
         dt: config.dt,
-        padding: [0.0, 0.0, 0.0],
+        
+        l1_start: 0.0, l1_end: 0.0, l1_band_gap: 0.0, l1_active: 0.0,
+        l2_start: 0.0, l2_end: 0.0, l2_band_gap: 0.0, l2_active: 0.0,
+        l3_start: 0.0, l3_end: 0.0, l3_band_gap: 0.0, l3_active: 0.0,
+        padding: [0.0, 0.0, 0.0, 0.0],
     };
+
+    let mut current_x = 200.0; // Start materials at x=200
+    for (i, layer) in config.layers.iter().enumerate() {
+        let end_x = current_x + layer.width;
+        if i == 0 {
+            sim_params.l1_start = current_x; sim_params.l1_end = end_x;
+            sim_params.l1_band_gap = layer.material.band_gap as f32; sim_params.l1_active = 1.0;
+        } else if i == 1 {
+            sim_params.l2_start = current_x; sim_params.l2_end = end_x;
+            sim_params.l2_band_gap = layer.material.band_gap as f32; sim_params.l2_active = 1.0;
+        } else if i == 2 {
+            sim_params.l3_start = current_x; sim_params.l3_end = end_x;
+            sim_params.l3_band_gap = layer.material.band_gap as f32; sim_params.l3_active = 1.0;
+        }
+        current_x = end_x;
+    }
+
     let param_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Param Buffer"),
         contents: bytemuck::cast_slice(&[sim_params]),
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
 
+    // 3. Pipeline Setup
     let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
-
     let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: None,
         entries: &[
@@ -71,7 +96,6 @@ async fn run_gpu_simulation(
             }
         ],
     });
-
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: None,
         layout: &bind_group_layout,
@@ -86,13 +110,11 @@ async fn run_gpu_simulation(
             },
         ],
     });
-
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
         bind_group_layouts: &[&bind_group_layout],
         push_constant_ranges: &[],
     });
-
     let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: None,
         layout: Some(&pipeline_layout),
@@ -102,7 +124,7 @@ async fn run_gpu_simulation(
         cache: None,
     });
 
-    // 3. Simulation Loop
+    // 4. Run Simulation
     let start_time = Instant::now();
     for _ in 0..config.sim_steps {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -116,15 +138,11 @@ async fn run_gpu_simulation(
         queue.submit(Some(encoder.finish()));
     }
     
-    // Timeout for simulation
+    // Timeout logic
     let poll_timeout = std::time::Duration::from_secs(2);
     let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(poll_timeout) });
     
-    let duration = start_time.elapsed();
-    println!("  Simulated {} steps for {} particles in {:.2?}", config.sim_steps, config.photon_count, duration);
-
-    // 4. Read back results
-    println!("  Reading back results...");
+    // 5. Read Results
     let buffer_size = (config.photon_count * std::mem::size_of::<GpuParticle>()) as wgpu::BufferAddress;
     let staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Staging Buffer"),
@@ -132,158 +150,131 @@ async fn run_gpu_simulation(
         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
-    
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     encoder.copy_buffer_to_buffer(&particle_buffer, 0, &staging_buffer, 0, buffer_size);
     queue.submit(Some(encoder.finish()));
-    
-    // Wait for copy
     let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(poll_timeout) });
 
     let buffer_slice = staging_buffer.slice(..);
     let (sender, receiver) = tokio::sync::oneshot::channel();
     buffer_slice.map_async(wgpu::MapMode::Read, move |v| sender.send(v).unwrap());
     
-    // Ensure we poll so the map_async callback fires!
-    // On some backends, you must poll for map_async to complete.
     device.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(poll_timeout) });
-
-    // Wait for mapping with timeout
-    match tokio::time::timeout(std::time::Duration::from_secs(2), receiver).await {
-        Ok(Ok(Ok(()))) => {},
-        Ok(Ok(Err(e))) => panic!("Buffer map failed: {:?}", e),
-        Ok(Err(_)) => panic!("Sender dropped"),
-        Err(_) => panic!("Timeout waiting for buffer map"),
+    if let Err(_) = tokio::time::timeout(poll_timeout, receiver).await {
+        panic!("GPU Timeout reading buffer");
     }
 
     let data = buffer_slice.get_mapped_range();
     let particles: &[GpuParticle] = bytemuck::cast_slice(&data);
 
-    let mut absorbed_photons = 0;
-    let mut transmitted_photons = 0;
+    let mut layer_absorbed = vec![0u32; 4]; // 0=none, 1=L1, 2=L2, 3=L3
+    let mut transmitted = 0;
+    let mut total_energy_collected = 0.0;
+    let mut total_input_energy = 0.0;
 
     for p in particles {
-        let p_type = p.properties[1];
-        if p_type == GpuParticle::TYPE_PHOTON {
-            if p.properties[2] < 0.5 { // Inactive Photon
-                absorbed_photons += 1;
-            } else {
-                transmitted_photons += 1;
+        // Reconstruct initial energy roughly or track it? GpuParticle stores energy in properties[0]
+        let initial_energy = p.properties[0] as f64;
+        total_input_energy += initial_energy;
+
+        if p.properties[2] < 0.5 { // Absorbed
+            let layer_idx = p.properties[3] as usize; // w component holds layer index
+            if layer_idx > 0 && layer_idx <= 3 {
+                layer_absorbed[layer_idx] += 1;
+                
+                // Calculate energy collected from this specific photon
+                // E_out = Voc * q ~ BandGap * 0.7
+                let band_gap = match layer_idx {
+                    1 => sim_params.l1_band_gap,
+                    2 => sim_params.l2_band_gap,
+                    3 => sim_params.l3_band_gap,
+                    _ => 0.0,
+                } as f64;
+                
+                total_energy_collected += band_gap * 0.7; 
             }
+        } else {
+            transmitted += 1;
         }
     }
-    drop(data); 
-    staging_buffer.unmap();    
-    let collected_pairs = absorbed_photons as f64 * 0.8;
-    let estimated_voc = config.host_material.band_gap * 0.7;
-    let output_energy_proxy_ev = collected_pairs * estimated_voc;
-    let total_input_photon_energy_ev = config.photon_count as f64 * config.photon_energy_ev;
-    let efficiency_percent = (output_energy_proxy_ev / total_input_photon_energy_ev) * 100.0;
+    drop(data);
+    staging_buffer.unmap();
+
+    let efficiency = (total_energy_collected / total_input_energy) * 100.0;
 
     ExperimentResult {
         config_name: config.name.clone(),
-        material_band_gap: config.host_material.band_gap,
-        estimated_voc,
-        collected_pairs,
-        efficiency_percent,
-        absorbed_photons,
-        transmitted_photons,
+        layers_info: format!("{} Layers", config.layers.len()),
+        total_efficiency_percent: efficiency,
+        absorbed_counts: layer_absorbed,
+        transmitted_photons: transmitted,
     }
 }
 
-#[tokio::main] 
-async fn main() {
+#[tokio::main] async fn main() {
     env_logger::init();
-    println!("Initializing GPU Experiment Framework...");
-
+    
     let instance = wgpu::Instance::default();
-    let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions::default())
-        .await
-        .expect("Failed to find a suitable GPU adapter");
-    println!("Selected GPU: {:?}", adapter.get_info());
-
-    let (device, queue) = adapter.request_device(
-        &wgpu::DeviceDescriptor {
-            label: None,
-            required_features: wgpu::Features::empty(),
-            required_limits: wgpu::Limits::default(),
-            memory_hints: wgpu::MemoryHints::Performance,
-            ..Default::default()
-        },
-    ).await.expect("Failed to create device");
+    let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions::default()).await.unwrap();
+    let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor {
+        label: None,
+        required_features: wgpu::Features::empty(),
+        required_limits: wgpu::Limits::default(),
+        memory_hints: wgpu::MemoryHints::Performance,
+        ..Default::default()
+    }).await.unwrap();
 
     let experiments = vec![
+        // 1. Standard Silicon (Single Junction)
         ExperimentConfig {
-            name: "Silicon Standard".to_string(),
-            host_material: MaterialDef::silicon(),
-            n_dopant: Some(Element::Phosphorus),
-            p_dopant: Some(Element::Boron),
-            n_doping_concentration: 0.001,
-            p_doping_concentration: 0.001,
-            photon_energy_ev: PHOTON_INITIAL_ENERGY_EV,
+            name: "Standard Silicon".to_string(),
+            layers: vec![
+                LayerDef { material: MaterialDef::silicon(), width: 400.0 },
+            ],
+            photon_energy_ev: 0.0, // Random spectrum handled in run_gpu_simulation
             photon_count: NUM_PARTICLES,
-            sim_steps: 800,
-            dt: 1.0,
-            sim_width: SIM_WIDTH,
-            sim_height: SIM_HEIGHT,
-            atom_density: 0.1,
+            sim_steps: 800, dt: 1.0, sim_width: SIM_WIDTH, sim_height: SIM_HEIGHT, atom_density: 0.1,
         },
+        // 2. Dual Junction (GaAs on Silicon)
+        // GaAs (1.42 eV) absorbs high energy blue light
+        // Silicon (1.12 eV) absorbs the rest
         ExperimentConfig {
-            name: "Gallium Arsenide (GaAs)".to_string(),
-            host_material: MaterialDef::gallium_arsenide(),
-            n_dopant: Some(Element::Sulfur),
-            p_dopant: Some(Element::Zinc),
-            n_doping_concentration: 0.001,
-            p_doping_concentration: 0.001,
-            photon_energy_ev: PHOTON_INITIAL_ENERGY_EV,
+            name: "Tandem GaAs/Si".to_string(),
+            layers: vec![
+                LayerDef { material: MaterialDef::gallium_arsenide(), width: 200.0 },
+                LayerDef { material: MaterialDef::silicon(), width: 200.0 },
+            ],
+            photon_energy_ev: 0.0,
             photon_count: NUM_PARTICLES,
-            sim_steps: 800,
-            dt: 1.0,
-            sim_width: SIM_WIDTH,
-            sim_height: SIM_HEIGHT,
-            atom_density: 0.1,
+            sim_steps: 800, dt: 1.0, sim_width: SIM_WIDTH, sim_height: SIM_HEIGHT, atom_density: 0.1,
         },
+        // 3. Triple Junction (Theoretical)
+        // High (2.0 eV) -> Med (1.4 eV) -> Low (0.7 eV)
         ExperimentConfig {
-            name: "Germanium (Ge)".to_string(),
-            host_material: MaterialDef::germanium(),
-            n_dopant: Some(Element::Phosphorus),
-            p_dopant: Some(Element::Boron),
-            n_doping_concentration: 0.001,
-            p_doping_concentration: 0.001,
-            photon_energy_ev: PHOTON_INITIAL_ENERGY_EV,
+            name: "Triple Junction".to_string(),
+            layers: vec![
+                LayerDef { material: MaterialDef { name: "High-Gap".into(), band_gap: 2.0, elements: vec![] }, width: 130.0 },
+                LayerDef { material: MaterialDef::gallium_arsenide(), width: 130.0 },
+                LayerDef { material: MaterialDef::germanium(), width: 140.0 },
+            ],
+            photon_energy_ev: 0.0,
             photon_count: NUM_PARTICLES,
-            sim_steps: 800,
-            dt: 1.0,
-            sim_width: SIM_WIDTH,
-            sim_height: SIM_HEIGHT,
-            atom_density: 0.1,
+            sim_steps: 800, dt: 1.0, sim_width: SIM_WIDTH, sim_height: SIM_HEIGHT, atom_density: 0.1,
         },
     ];
 
     let mut results = Vec::new();
-    let total_start = Instant::now();
-    let time_limit = std::time::Duration::from_secs(15);
-
-    for config in &experiments {
-        if total_start.elapsed() > time_limit {
-            println!("Global time limit of 15s reached. Stopping experiments.");
-            break;
-        }
-        
-        let result = run_gpu_simulation(&device, &queue, config).await;
-        results.push(result);
+    for config in experiments {
+        results.push(run_gpu_simulation(&device, &queue, &config).await);
     }
 
-    println!("\n--- Experiment Results ---");
+    println!("\n--- Multi-Junction Results ---");
     for res in &results {
-        println!("{}: Efficiency = {:.2}% (Absorbed: {}, Transmitted: {})",
-            res.config_name, res.efficiency_percent, res.absorbed_photons, res.transmitted_photons);
-        println!("    Est. Voc: {:.2} V, Collected Pairs: {:.1}", res.estimated_voc, res.collected_pairs);
+        println!("{}: Efficiency = {:.2}%", res.config_name, res.total_efficiency_percent);
+        println!("   Layer Absorption: L1:{}, L2:{}, L3:{}", 
+            res.absorbed_counts[1], res.absorbed_counts[2], res.absorbed_counts[3]);
     }
-
-    if let Err(e) = physics_sim::experiments::plot_results(&results, "experiment_comparison.png") {
-        eprintln!("Error plotting results: {}", e);
-    } else {
-        println!("\nComparison plot saved to 'experiment_comparison.png'");
-    }
+    
+    physics_sim::experiments::plot_results(&results, "multijunction_comparison.png").unwrap();
+    println!("\nSaved 'multijunction_comparison.png'");
 }

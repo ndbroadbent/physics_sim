@@ -1,23 +1,25 @@
-// Physics Simulation Shader
-
 struct Particle {
-    position: vec4<f32>, // x, y, z, mass
-    velocity: vec4<f32>, // vx, vy, vz, charge
-    properties: vec4<f32>, // energy, type, active, padding
+    position: vec4<f32>,
+    velocity: vec4<f32>,
+    properties: vec4<f32>, // energy, type, active, layer_absorbed_index
 };
 
 struct SimParams {
     width: f32,
     height: f32,
     atom_density: f32,
-    band_gap: f32,
     dt: f32,
+    
+    l1_start: f32, l1_end: f32, l1_band_gap: f32, l1_active: f32,
+    l2_start: f32, l2_end: f32, l2_band_gap: f32, l2_active: f32,
+    l3_start: f32, l3_end: f32, l3_band_gap: f32, l3_active: f32,
+    
+    padding: vec3<f32>,
 };
 
 @group(0) @binding(0) var<storage, read_write> particles: array<Particle>;
 @group(0) @binding(1) var<uniform> params: SimParams;
 
-// Simple pseudo-random generator
 fn rand(seed: vec2<f32>) -> f32 {
     return fract(sin(dot(seed, vec2<f32>(12.9898, 78.233))) * 43758.5453);
 }
@@ -31,42 +33,47 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     var p = particles[index];
 
-    // 1. Check if active
     if (p.properties.z < 0.5) {
         return;
     }
 
-    // 2. Move Particle
-    // p.position.x += p.velocity.x * params.dt;
-    // p.position.y += p.velocity.y * params.dt;
-    // WGSL vec arithmetic
     p.position = p.position + p.velocity * params.dt;
 
-    // 3. Boundary Check (Simple Wrap/Kill)
     if (p.position.x > params.width) {
-        p.properties.z = 0.0; // Kill
+        p.properties.z = 0.0; 
     }
 
-    // 4. Interaction Logic (Simplified)
-    // Check if we are in the material slab (x > 200 && x < 600)
-    if (p.position.x > 200.0 && p.position.x < 600.0) {
-        // Interaction probability
-        let rng = rand(p.position.xy);
-        
-        if (p.properties.y == 0.0) { // Photon
-             // Probability ~ density * dt
-             if (rng < params.atom_density * 0.1) {
-                 // Absorbed?
-                 if (p.properties.x > params.band_gap) {
-                     p.properties.z = 0.0; // Kill photon
-                     // In a full sim, we would spawn electrons here. 
-                     // But compute shaders can't easily "push" to the array without atomics.
-                     // For now, just kill it (Photoelectric absorption).
-                 }
-             }
+    // Multi-Layer Interaction Logic
+    let x = p.position.x;
+    let energy = p.properties.x;
+    let rng = rand(p.position.xy);
+    let prob = params.atom_density * params.dt; // Simplified
+
+    if (p.properties.y == 0.0) { // Photon
+        if (rng < prob) {
+            // Layer 1 Check
+            if (params.l1_active > 0.5 && x >= params.l1_start && x < params.l1_end) {
+                if (energy >= params.l1_band_gap) {
+                    p.properties.z = 0.0; // Absorbed
+                    p.properties.w = 1.0; // Tag as absorbed by Layer 1
+                }
+            }
+            // Layer 2 Check
+            else if (params.l2_active > 0.5 && x >= params.l2_start && x < params.l2_end) {
+                if (energy >= params.l2_band_gap) {
+                    p.properties.z = 0.0; // Absorbed
+                    p.properties.w = 2.0; // Tag as absorbed by Layer 2
+                }
+            }
+            // Layer 3 Check
+            else if (params.l3_active > 0.5 && x >= params.l3_start && x < params.l3_end) {
+                if (energy >= params.l3_band_gap) {
+                    p.properties.z = 0.0; // Absorbed
+                    p.properties.w = 3.0; // Tag as absorbed by Layer 3
+                }
+            }
         }
     }
 
-    // Write back
     particles[index] = p;
 }

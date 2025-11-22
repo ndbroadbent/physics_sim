@@ -43,3 +43,19 @@ This file tracks "What If" scenarios and random ideas for the Physics Simulation
 *   **Target:** ~22-24% Efficiency.
 *   **Configuration:** Monocrystalline Silicon, highly optimized doping, Back Surface Field (BSF), Anti-Reflective Coating.
 *   **Challenge:** Can we tune our simulation parameters to match this 24% number exactly?
+
+## 6. The "Micro-Turbine" / Magnetic Dust Hypothesis
+**Concept:**
+*   Traditional power generation: Heat -> Steam -> Turbine -> Moving Magnet -> Current.
+*   **Idea:** Shrink this to the micro/nano scale.
+*   **Mechanism:** "Pushing" tiny magnets (e.g., magnetized iron dust or molecular magnets) through tiny semiconductor/metal channels using **Heat Energy** (Brownian motion or directed thermal gradient).
+*   **Physics:** As these micro-magnets move past coils/wires (or through conductive fluids), they should induce a tiny EMF via Faraday's Law ($d\Phi_B/dt$).
+*   **Question:** Can the chaotic thermal motion of magnetic particles be rectified into a directional current?
+*   **Theoretical Link:** This sounds like a **Thermo-Magnetic Generator** or a variant of **Magnetohydrodynamics (MHD)** at the nano-scale.
+*   **Challenge:** The Second Law of Thermodynamics (Maxwell's Demon). You can't extract work from random heat without a temperature difference (Hot side vs Cold side).
+*   **Simulation Proposal:**
+    *   Model a fluid of "Magnetic Particles".
+    *   Apply a heat gradient (Hot Left -> Cold Right).
+    *   Particles drift/diffuse from Hot to Cold.
+    *   Place "Pick-up Coils" (simulated induction loops) along the path.
+    *   Measure if a net current is induced.
