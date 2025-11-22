@@ -1,0 +1,19 @@
+# vscode
+.vscode/
+
+# Build artifacts
+target/
+
+# Rust
+**/*.rs.bk
+
+# Cargo
+Cargo.lock
+
+# OS-specific
+.DS_Store
+
+# Generated files
+*.png
+*.jpg
+*.svg
