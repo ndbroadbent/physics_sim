@@ -36,6 +36,11 @@ name = "physics_genetic_v3"
 path = "src/main_genetic_v3.rs"
 
 [[bin]]
+name = "physics_wave"
+path = "src/main_wave.rs"
+
+
+[[bin]]
 name = "physics_materials"
 path = "src/main_materials.rs"
 
