@@ -19,6 +19,22 @@ path = "src/main_genetic.rs"
 name = "visualize_genome"
 path = "src/main_visualize_genome.rs"
 
+[[bin]]
+name = "verify_geometry"
+path = "src/verify_geometry.rs"
+
+[[bin]]
+name = "slice_render"
+path = "src/slice_render.rs"
+
+[[bin]]
+name = "physics_genetic_v2"
+path = "src/main_genetic_v2.rs"
+
+[[bin]]
+name = "physics_genetic_v3"
+path = "src/main_genetic_v3.rs"
+
 [dependencies]
 bytemuck = { version = "1.24.0", features = ["derive"] }
 env_logger = "0.11.8"
@@ -31,3 +47,5 @@ wgpu = "27.0.1"
 winit = "0.30.12"
 tokio = { version = "1", features = ["full"] }
 anyhow = "1.0.100"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"

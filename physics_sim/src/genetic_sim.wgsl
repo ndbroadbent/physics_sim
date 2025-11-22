@@ -34,7 +34,8 @@ fn sdBox(p: vec3<f32>, b: vec3<f32>) -> f32 {
 }
 
 // --- Fractal Generation ---
-// Not used initially, but kept for future fractal ratchets
+
+// A simple Menger Sponge-like iteration or similar IFS
 fn sdFractalChannel(pos: vec3<f32>, genes_array: array<vec4<f32>, 4>) -> f32 {
     var p = pos;
     var d = sdBox(p, vec3<f32>(20.0, 20.0, 20.0)); // Bounding box. Reduced size for better detail.
@@ -50,10 +51,13 @@ fn sdFractalChannel(pos: vec3<f32>, genes_array: array<vec4<f32>, 4>) -> f32 {
         p = abs(p + offset) - offset; 
         p = rotY(p, rot_angle);       
         p = p * scale;                
-        d = min(d, sdBox(p, vec3<f32>(1.0)) / pow(scale, f32(i + 1)));
+        // Subtract box to create channels
+        let box_dist = sdBox(p, vec3<f32>(1.0));
+        let scale_factor = pow(scale, f32(i + 1));
+        d = max(d, -box_dist / scale_factor);
     }
     
-    return -d; 
+    return d; 
 }
 
 
@@ -95,8 +99,8 @@ fn sdSawtoothRatchet(p_in: vec3<f32>, genes_array: array<vec4<f32>, 4>) -> f32 {
 // Main evaluation function
 fn map_geometry(p: vec3<f32>, genes_array: array<vec4<f32>, 4>) -> f32 {
     // We will use the simple sawtooth ratchet for now
-    return sdSawtoothRatchet(p, genes_array);
-    // return sdFractalChannel(p, genes_array); // Keep for later
+    // return sdSawtoothRatchet(p, genes_array);
+    return sdFractalChannel(p, genes_array); // Switch back to fractal!
 }
 
 // Function to calculate surface normal

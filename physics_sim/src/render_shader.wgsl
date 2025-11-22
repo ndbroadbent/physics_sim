@@ -68,36 +68,76 @@ fn sdBox(p: vec3<f32>, b: vec3<f32>) -> f32 {
     return length(max(q, vec3<f32>(0.0))) + min(max(q.x, max(q.y, q.z)), 0.0);
 }
 
-// Fractal Generation - using the genome
-fn sdFractalChannel(pos: vec3<f32>, genome_genes: array<vec4<f32>, 4>) -> f32 {
+// --- Fractal Generation ---
+// Not used currently, but kept for reference
+fn sdFractalChannel(pos: vec3<f32>, genes_array: array<vec4<f32>, 4>) -> f32 {
     var p = pos;
-    var d = sdBox(p, vec3<f32>(20.0, 20.0, 20.0)); 
+    var d = sdBox(p, vec3<f32>(10.0, 10.0, 10.0)); // Smaller bounding box
 
-    let iterations = 4;
+    let iterations = 8; // Increased iterations for more detail
     
-    // Unpack genes
-    let g0 = get_gene(0, genome_genes);
-    let g1 = get_gene(1, genome_genes);
-    let g2 = get_gene(2, genome_genes);
-    let g3 = get_gene(3, genome_genes);
-    let g4 = get_gene(4, genome_genes);
-
-    let scale = g0 * 2.0 + 1.0; 
-    let offset = vec3<f32>(g1, g2, g3) * 5.0; 
-    let rot_angle = g4 * 3.14159 * 2.0; 
+    // Unpack genes using helper
+    let scale = get_gene(0, genes_array) * 2.0 + 1.0; 
+    let offset = vec3<f32>(get_gene(1, genes_array), get_gene(2, genes_array), get_gene(3, genes_array)) * 5.0; 
+    let rot_angle = get_gene(4, genes_array) * 3.14159 * 2.0; 
 
     for (var i = 0; i < iterations; i++) {
         p = abs(p + offset) - offset; 
         p = rotY(p, rot_angle);       
         p = p * scale;                
-        d = min(d, sdBox(p, vec3<f32>(1.0)) / pow(scale, f32(i + 1)));
+        // Subtract box to create channels
+        let box_dist = sdBox(p, vec3<f32>(1.0));
+        let scale_factor = pow(scale, f32(i + 1));
+        d = max(d, -box_dist / scale_factor);
     }
     
-    return -d; 
+    return d; 
 }
 
-fn map_geometry(p: vec3<f32>, genome_genes: array<vec4<f32>, 4>) -> f32 {
-    return sdFractalChannel(p, genome_genes);
+// --- New: Sawtooth Ratchet Primitive ---
+// Matches genetic_sim.wgsl logic
+fn sdSawtoothRatchet(p_in: vec3<f32>, genes_array: array<vec4<f32>, 4>) -> f32 {
+    var p = p_in;
+    // p.x = p.x % 5.0; // Repeat every 5 units in X. WGSL mod is different? 
+    // Use fract for repetition: 
+    // x = fract(x / 5.0) * 5.0;
+    // But standard mod should work? Let's implement manual repeat.
+    let repeat = 5.0;
+    p.x = p.x - repeat * floor(p.x / repeat);
+    
+    let tooth_height = get_gene(0, genes_array) * 4.0 + 1.0; // Gene 0: height (1 to 5)
+    let tooth_angle = get_gene(1, genes_array) * 0.5 + 0.1; // Gene 1: angle (small bias)
+    let wall_thickness = 0.5;
+
+    // A single V-shape.
+    // Shift p to make the origin at the tip of the V
+    p.x -= 2.5;
+    p.y -= tooth_height; 
+
+    // Rotate the space to align with one side of the V
+    // let a = atan2(p.y, p.x); // Unused
+    // let l = length(p.xy); // Unused
+    
+    // Define the V-shape using two planes
+    // Angle 1
+    let d1 = dot(p.xy, vec2<f32>(cos(tooth_angle), sin(tooth_angle)));
+    // Angle 2 (negative of angle 1, to make the V)
+    let d2 = dot(p.xy, vec2<f32>(cos(-tooth_angle), sin(-tooth_angle)));
+
+    // Combined shape
+    let d_v = max(d1, d2) - wall_thickness; // Extrude into a V
+    
+    // Subtract a flat base
+    let base = p.y + tooth_height; // Distance to the floor
+    
+    return max(d_v, -base); // The shape is the V, constrained by the floor
+}
+
+// Main evaluation function
+fn map_geometry(p: vec3<f32>, genes_array: array<vec4<f32>, 4>) -> f32 {
+    // Switch back to fractal for interesting visuals
+    return sdFractalChannel(p, genes_array);
+    // return sdSawtoothRatchet(p, genes_array);
 }
 
 // --- Raymarching ---
