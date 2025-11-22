@@ -1,6 +1,6 @@
 use physics_sim::fields::{FieldCoupling, FieldType};
 use physics_sim::particles::{Particle, Atom};
-use physics_sim::elements::Element;
+use physics_sim::elements::{Element, MaterialDef};
 use physics_sim::benchmark::GoldStandard;
 use physics_sim::visualization::SimulationVisualizer;
 use rand::Rng;
@@ -12,7 +12,6 @@ const ATOM_DENSITY: f64 = 0.1;
 const PHOTON_COUNT: usize = 500;
 
 // Doping Configuration
-const HOST_ELEMENT: Element = Element::Silicon;
 // N-Type Side (Left)
 const N_DOPANT: Element = Element::Phosphorus;
 const N_DOPING_CONCENTRATION: f64 = 0.001; // 1 in 1000 atoms
@@ -21,19 +20,18 @@ const P_DOPANT: Element = Element::Boron;
 const P_DOPING_CONCENTRATION: f64 = 0.001;
 
 fn main() {
+    // Choose your host material here
+    let host_material = MaterialDef::silicon(); // Or MaterialDef::gallium_arsenide();
+    let host_element = host_material.elements[0].0; // Assuming primary element is the host
+
     println!("Initializing 2D Simulation with Doped Lattice...");
-    println!("Host: {:?}, N-Type: {:?}, P-Type: {:?}", HOST_ELEMENT, N_DOPANT, P_DOPANT);
+    println!("Host: {}, N-Type: {:?}, P-Type: {:?}", host_material.name, N_DOPANT, P_DOPANT);
     
     let universe_constants = FieldCoupling::electrodynamics_only();
     let mut visualizer = SimulationVisualizer::new(SIM_WIDTH, SIM_HEIGHT);
     
-    // Band Gap Map (spatially varying)
-    // We will define the junction at x=400
-    // Left side (200-400): N-doped
-    // Right side (400-600): P-doped
-    // Band gap is mostly determined by the host (Si ~ 1.1 eV), 
-    // but strictly speaking, doping narrows it slightly. We'll stick to 1.1 eV for now.
-    let band_gap_ev = 1.1;
+    let band_gap_ev = host_material.band_gap;
+
 
     // 1. Setup Material Lattice
     // We build the lattice atom by atom, applying doping logic.
@@ -51,36 +49,31 @@ fn main() {
                     if rand::rng().random::<f64>() < N_DOPING_CONCENTRATION {
                         N_DOPANT // Doped!
                     } else {
-                        HOST_ELEMENT
+                        host_element
                     }
                 } else {
                     // P-Side
                     if rand::rng().random::<f64>() < P_DOPING_CONCENTRATION {
                         P_DOPANT // Doped!
                     } else {
-                        HOST_ELEMENT
+                        host_element
                     }
                 };
 
                 let atom = Atom::new(element, x as f64, y as f64, 0.0);
                 
                 // Visualization color coding? 
-                // We can't change the visualizer signature easily, but let's just draw atoms.
-                visualizer.draw_atom(x as f64, y as f64); // Maybe add color support later
+                visualizer.draw_atom(x as f64, y as f64);
                 
                 // Doping Physics: Create Free Carriers
-                // If we placed a Phosphorous (5 valence) in Silicon (4 valence):
-                // 5 - 4 = +1 Free Electron.
-                if element.valence_electrons() > HOST_ELEMENT.valence_electrons() {
-                    let excess = element.valence_electrons() - HOST_ELEMENT.valence_electrons();
+                if element.valence_electrons() > host_element.valence_electrons() {
+                    let excess = element.valence_electrons() - host_element.valence_electrons();
                     for _ in 0..excess {
                         carriers.push(Particle::new_charge_carrier(FieldType::FreeElectron, x as f64, y as f64));
                     }
                 }
-                // If we placed Boron (3 valence) in Silicon (4 valence):
-                // 4 - 3 = 1 Missing Electron (Hole).
-                else if element.valence_electrons() < HOST_ELEMENT.valence_electrons() {
-                     let deficit = HOST_ELEMENT.valence_electrons() - element.valence_electrons();
+                else if element.valence_electrons() < host_element.valence_electrons() {
+                     let deficit = host_element.valence_electrons() - element.valence_electrons();
                      for _ in 0..deficit {
                         carriers.push(Particle::new_charge_carrier(FieldType::Hole, x as f64, y as f64));
                      }
@@ -148,59 +141,32 @@ fn main() {
     }
 
     // 3. Simulate Current (Drift + Diffusion)
-    // In a real P-N junction, the carriers diffuse until they create an E-field.
-    // For this "Toy" model, we will apply a logic:
-    // "If there are more Electrons on the Left (N-type), they want to diffuse Right."
-    // "If there are more Holes on the Right (P-type), they want to diffuse Left."
-    // BUT, the built-in E-field (from the initial diffusion) stops them.
-    // 
-    // The *Photogenerated* carriers are the ones that generate useful current.
-    // The Field points N -> P (Left -> Right) ??? 
-    // Wait, N-side has (+) ions left behind. P-side has (-) ions left behind.
-    // Field points (+) -> (-), so N -> P (Left -> Right).
-    // Electron (negative) moves AGAINST field -> Moves Left (out of N terminal).
-    // Hole (positive) moves WITH field -> Moves Right (out of P terminal).
-    
-    // We will stick to the "Simple Field" logic for drift, but now applied to the 
-    // new mixed carrier population.
-    
     println!("Simulating Carrier Transport ({} total carriers)...", carriers.len());
     
     for _tick in 0..100 {
         for carrier in carriers.iter_mut() {
             if !carrier.active { continue; }
             
-            // Field exists mainly at the junction (x=400).
-            // Let's model a Gaussian field around x=400.
             let dist_from_junction = (carrier.position.x - 400.0).abs();
             let field_strength = if dist_from_junction < 50.0 {
-                // Strong field near junction
                 0.8 * (-dist_from_junction / 20.0).exp()
             } else {
                 0.0
             };
             
-            // Field Direction: Points Right (N->P).
-            // Force = qE.
-            let force_x = carrier.charge * field_strength; // +1 * E -> Right. -1 * E -> Left.
+            let force_x = carrier.charge * field_strength;
             
-            // Update Position
             carrier.position.x += force_x;
             
-            // Add some random thermal noise (Diffusion)
             let noise = (rand::rng().random::<f64>() - 0.5) * 0.5;
             carrier.position.x += noise;
 
-            // Draw
             visualizer.draw_carrier(carrier.position.x, carrier.position.y, carrier.kind == FieldType::Hole);
 
-            // Collection (Efficiency Metric)
-            // Electron collected at Left (x < 200)
-            // Hole collected at Right (x > 600)
             if carrier.kind == FieldType::FreeElectron && carrier.position.x <= 200.0 {
-                carrier.active = false; // Harvested!
+                carrier.active = false;
             } else if carrier.kind == FieldType::Hole && carrier.position.x >= 600.0 {
-                carrier.active = false; // Harvested!
+                carrier.active = false;
             }
         }
     }
@@ -209,6 +175,55 @@ fn main() {
     visualizer.save("simulation_output.png");
     println!("Saved visual to 'simulation_output.png'");
 
-    // Benchmark logic remains same for photon attenuation
-    // ... (omitted for brevity, code logic is identical to before)
+    // 4. Verify against Gold Standard
+    let sim_data: Vec<(f64, f64)> = survival_counts.iter().enumerate()
+        .filter(|(x, _)| *x >= 200 && *x < 600) // Only measure inside the slab
+        .step_by(10) // Sample every 10 pixels
+        .map(|(x, count)| ((x - 200) as f64, *count as f64)) // Shift x relative to slab start
+        .collect();
+
+    let theory_sigma = universe_constants.electromagnetic * 10.0;
+    let initial_slab_count = survival_counts[200] as f64;
+
+    match GoldStandard::generate_attenuation_plot(
+        "benchmark_plot.png", 
+        &sim_data, 
+        ATOM_DENSITY, 
+        theory_sigma,
+        initial_slab_count
+    ) {
+        Ok(_) => println!("Saved benchmark plot to 'benchmark_plot.png'"),
+        Err(e) => println!("Failed to generate plot: {}", e),
+    }
+
+    // --- Efficiency Calculation ---
+    // Output Current (Collected carriers)
+    let collected_electrons = carriers.iter().filter(|c| !c.active && c.kind == FieldType::FreeElectron).count() as f64;
+    let collected_holes = carriers.iter().filter(|c| !c.active && c.kind == FieldType::Hole).count() as f64;
+    
+    // Total collected electron-hole pairs that contributed to current
+    let effective_collected_pairs = collected_electrons.min(collected_holes);
+
+    // Ideal Open Circuit Voltage (Voc) - Simplified approximation
+    let estimated_voc = band_gap_ev * 0.7; // Volts, simple heuristic
+
+    // Input Light Energy (in eV)
+    let total_input_photon_energy_ev = PHOTON_COUNT as f64 * 2.5; // Each photon was 2.5 eV
+
+    // Output electrical energy in eV-Volts (effectively a power proxy here)
+    // To get actual energy in Joules, we'd multiply by elementary charge 'e'
+    let output_energy_proxy_ev = effective_collected_pairs * estimated_voc; 
+    
+    let efficiency = (output_energy_proxy_ev / total_input_photon_energy_ev) * 100.0;
+
+    println!("--------------------------------------------------");
+    println!("Efficiency Results for {}:", host_material.name);
+    println!("  Material Band Gap: {:.2} eV", band_gap_ev);
+    println!("  Estimated Voc: {:.2} V", estimated_voc);
+    println!("  Photons Fired: {}", PHOTON_COUNT);
+    println!("  Collected Electron-Hole Pairs: {:.0}", effective_collected_pairs);
+    println!("  Total Input Photon Energy: {:.0} eV", total_input_photon_energy_ev);
+    println!("  Effective Output Energy (proxy): {:.0} eV*V", output_energy_proxy_ev);
+    println!("  Power Conversion Efficiency: {:.2}%", efficiency);
+    println!("--------------------------------------------------");
 }
