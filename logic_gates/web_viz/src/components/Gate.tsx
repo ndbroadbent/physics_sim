@@ -1,5 +1,5 @@
 import React from 'react';
-import { useGateValue } from '../hooks/useCircuit';
+import { useGateValue, useGateInputs } from '../hooks/useCircuit';
 import '../circuit.css';
 
 interface GateProps {
@@ -11,10 +11,14 @@ interface GateProps {
 
 export const Gate: React.FC<GateProps> = ({ id, label, type = 'NAND', onClick }) => {
   const value = useGateValue(id);
+  const inputValues = useGateInputs(id);
   
   const valueClass = value === 1 ? 'high' : value === 0 ? 'low' : 'unknown';
   const typeClass = `gate-type-${type}`;
   const interactiveClass = onClick ? 'interactive' : '';
+
+  // Helpers for input port classes
+  const getPortClass = (val: number | null) => val === 1 ? 'high' : val === 0 ? 'low' : '';
 
   return (
     <div 
@@ -28,9 +32,18 @@ export const Gate: React.FC<GateProps> = ({ id, label, type = 'NAND', onClick })
 
       {type !== 'INPUT' && (
         <>
-           {/* Assume max 2 inputs for NAND. INPUT has 0. OUTPUT has 1. */}
-           <div id={`gate-${id}-in-0`} className="gate-port in-0" />
-           {type === 'NAND' && <div id={`gate-${id}-in-1`} className="gate-port in-1" />}
+           {/* Input 0 */}
+           <div 
+             id={`gate-${id}-in-0`} 
+             className={`gate-port in-0 ${getPortClass(inputValues[0])}`} 
+           />
+           {/* Input 1 (only for NAND) */}
+           {type === 'NAND' && (
+             <div 
+               id={`gate-${id}-in-1`} 
+               className={`gate-port in-1 ${getPortClass(inputValues[1])}`} 
+             />
+           )}
         </>
       )}
       
@@ -39,7 +52,7 @@ export const Gate: React.FC<GateProps> = ({ id, label, type = 'NAND', onClick })
       </span>
 
       {type !== 'OUTPUT' && (
-        <div id={`gate-${id}-out`} className="gate-port out" />
+        <div id={`gate-${id}-out`} className={`gate-port out ${valueClass}`} />
       )}
     </div>
   );

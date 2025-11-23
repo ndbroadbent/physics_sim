@@ -50,3 +50,34 @@ export const useWireValue = (wireId: string) => {
     () => sim.state.wires[wireId]?.value ?? null
   );
 };
+
+export const useGateInputs = (gateId: string) => {
+  const sim = useSimulator();
+
+  const snapshot = useSyncExternalStore(
+    (callback) => {
+      const unsubscribe = sim.subscribe((event) => {
+        if (event.type === 'WIRE_UPDATE') {
+             const wire = sim.state.wires[event.wireId];
+             if (wire && wire.targetId === gateId) {
+                 callback();
+             }
+        }
+        if (event.type === 'RESET') callback();
+      });
+      return unsubscribe;
+    },
+    () => {
+        const gate = sim.state.gates[gateId];
+        if (!gate) return "";
+        // Return a stable string representation to avoid infinite loops
+        return gate.inputs.map(wId => sim.state.wires[wId]?.value ?? 'N').join(',');
+    }
+  );
+
+  // Parse the snapshot back to array
+  return React.useMemo(() => {
+      if (!snapshot) return [];
+      return snapshot.split(',').map(v => v === 'N' ? null : Number(v));
+  }, [snapshot]);
+};

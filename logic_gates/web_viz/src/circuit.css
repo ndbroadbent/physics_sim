@@ -53,12 +53,13 @@
     border-color: var(--gate-border);
   }
 
-  .gate.high .gate-port {
+  /* Individual Port Styling */
+  .gate-port.high {
       background: var(--color-high);
       box-shadow: 0 0 5px var(--color-high);
   }
 
-  .gate.low .gate-port {
+  .gate-port.low {
       background: #f66;
       box-shadow: 0 0 2px #500;
   }
