@@ -105,7 +105,7 @@ function App() {
 
   return (
     <SimulatorProvider simulator={sim}>
-      <div className="app-container">
+      <div className="app-container logic-gates-viz-root">
         <div className="controls" style={{ position: 'absolute', top: 0, right: 0, zIndex: 100 }}>
             <div className="control-group range" style={{ background: '#111', padding: '10px', borderRadius: '0 0 0 8px', border: '1px solid #333' }}>
                  <label>Speed</label>

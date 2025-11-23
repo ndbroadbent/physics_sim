@@ -12,7 +12,6 @@
         color: #333;
         margin: 0;
       }
-      /* The blog content is constrained for readability */
       .blog-post {
         max-width: 900px;
         margin: 40px auto;
@@ -21,9 +20,7 @@
       .blog-post p {
         line-height: 1.6;
       }
-      /* The component itself is NOT constrained and will be full-width */
       .component-wrapper {
-        /* No max-width here */
         width: 100%;
         margin: 40px 0;
         border-top: 1px solid #ddd;
@@ -48,11 +45,10 @@
       </p>
     </div>
 
-    <!-- The component wrapper is outside the constrained blog post div -->
     <div class="component-wrapper">
       <div id="logic-gates-demo-root"></div>
     </div>
-    
+
     <div class="blog-post">
       <p>
         Notice how the individual NAND gates are grouped into familiar components like AND, XOR, and Half Adders. The carry-out from one bit "ripples" to the next, which is characteristic of this simple adder design.

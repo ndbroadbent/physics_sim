@@ -1,0 +1,73 @@
+<style>
+  #nand-truth-table-wrapper {
+    width: 100%;
+    --dark-bg: #222426;
+    --header-bg: #333;
+    --low-bg: #440000;
+    --high-bg: #005c39;
+    --text-color: #e8e6e3;
+    --border-color: #444;
+    font-family: sans-serif;
+    margin: 2em 0;
+  }
+
+  #nand-truth-table-wrapper .truth-table {
+    width: 100%;
+    background-color: var(--dark-bg);
+    color: var(--text-color);
+    border: 1px solid var(--border-color);
+    border-collapse: collapse;
+    text-align: center;
+    margin: 1em;
+  }
+  #nand-truth-table-wrapper .truth-table td,
+  #nand-truth-table-wrapper .truth-table th {
+    border: 1px solid var(--border-color);
+    padding: 0.5em 0.8em;
+    vertical-align: middle;
+  }
+  #nand-truth-table-wrapper .truth-table .header-row {
+    background-color: var(--header-bg);
+    font-weight: bold;
+  }
+  #nand-truth-table-wrapper .truth-table .value-0 {
+    background-color: var(--low-bg);
+    color: var(--text-color);
+  }
+  #nand-truth-table-wrapper .truth-table .value-1 {
+    background-color: var(--high-bg);
+    color: var(--text-color);
+  }
+</style>
+
+<div id="nand-truth-table-wrapper">
+  <table class="truth-table">
+    <tbody>
+      <tr class="header-row">
+        <td>A</td>
+        <td>B</td>
+        <td>A NAND B</td>
+      </tr>
+      <tr>
+        <td class="value-0">0</td>
+        <td class="value-0">0</td>
+        <td class="value-1">1</td>
+      </tr>
+      <tr>
+        <td class="value-0">0</td>
+        <td class="value-1">1</td>
+        <td class="value-1">1</td>
+      </tr>
+      <tr>
+        <td class="value-1">1</td>
+        <td class="value-0">0</td>
+        <td class="value-1">1</td>
+      </tr>
+      <tr>
+        <td class="value-1">1</td>
+        <td class="value-1">1</td>
+        <td class="value-0">0</td>
+      </tr>
+    </tbody>
+  </table>
+</div>

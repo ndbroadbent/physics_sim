@@ -1,51 +1,50 @@
-/* Additions to existing CSS */
+.logic-gates-viz-root {
+  /* --- Extra CSS --- */
+  .logic-group-box {
+    border: 1px dashed #666;
+    padding: 8px;
+    position: relative;
+    border-radius: 4px;
+    margin: 4px;
+  }
 
-.logic-group-box {
-  border: 1px dashed #666;
-  padding: 8px;
-  position: relative;
-  border-radius: 4px;
-  margin: 4px;
-}
+  .logic-label {
+    position: absolute;
+    top: -8px;
+    right: 5px;
+    background: #1a1a1a;
+    padding: 0 4px;
+    font-size: 9px;
+    color: #aaa;
+    font-weight: bold;
+    z-index: 5;
+  }
 
-.logic-label {
-  position: absolute;
-  top: -8px;
-  right: 5px;
-  background: #1a1a1a; /* Match row bg */
-  padding: 0 4px;
-  font-size: 9px;
-  /* Default color, overridden by specific boxes */
-  color: #aaa; 
-  font-weight: bold;
-  z-index: 5; /* Ensure label is on top */
-}
+  .or-logic-box {
+      border-color: #8f8;
+  }
+  .or-logic-box .logic-label {
+      color: #8f8;
+  }
 
-/* Order these to ensure correct cascade if there are nested elements */
-.or-logic-box {
-    border-color: #8f8;
-}
-.or-logic-box .logic-label {
-    color: #8f8;
-}
+  .and-box {
+      border-color: #88f;
+  }
+  .and-box .logic-label {
+      color: #88f;
+  }
 
-.and-box {
-    border-color: #88f;
-}
-.and-box .logic-label {
-    color: #88f;
-}
+  .xor-box {
+      border-color: #fa0;
+  }
+  .xor-box .logic-label {
+      color: #fa0;
+  }
 
-.xor-box {
-    border-color: #fa0;
-}
-.xor-box .logic-label {
-    color: #fa0;
-}
-
-.not-box {
-    border-color: #f88;
-}
-.not-box .logic-label {
-    color: #f88;
+  .not-box {
+      border-color: #f88;
+  }
+  .not-box .logic-label {
+      color: #f88;
+  }
 }

@@ -1,0 +1,81 @@
+<!--
+  To use this on your Ghost blog, paste this entire code block into an HTML card.
+  It is self-contained and will not interfere with your blog's existing styles.
+-->
+
+<style>
+  /* Wrapper to scope all our styles and prevent conflicts */
+  #nand-truth-table-wrapper {
+    --dark-bg: #222426;
+    --header-bg: #333;
+    --low-bg: #440000;
+    --high-bg: #005c39;
+    --text-color: #e8e6e3;
+    --border-color: #444;
+    font-family: sans-serif;
+    margin: 2em 0;
+  }
+  #nand-truth-table-wrapper .wikitable {
+    background-color: var(--dark-bg);
+    color: var(--text-color);
+    border: 1px solid var(--border-color);
+    border-collapse: collapse;
+    text-align: center;
+    float: right;
+    margin-left: 1em;
+  }
+  #nand-truth-table-wrapper .wikitable td,
+  #nand-truth-table-wrapper .wikitable th {
+    border: 1px solid var(--border-color);
+    padding: 0.5em 0.8em;
+    vertical-align: middle;
+  }
+  #nand-truth-table-wrapper .wikitable .header-row {
+    background-color: var(--header-bg);
+    font-weight: bold;
+  }
+  #nand-truth-table-wrapper .wikitable .value-0 {
+    background-color: var(--low-bg);
+    color: var(--text-color);
+  }
+  #nand-truth-table-wrapper .wikitable .value-1 {
+    background-color: var(--high-bg);
+    color: var(--text-color);
+  }
+</style>
+
+<div id="nand-truth-table-wrapper">
+  <table class="wikitable floatright">
+    <tbody>
+      <tr class="header-row">
+        <td colspan="2"><b>Input</b></td>
+        <td><b>Output</b></td>
+      </tr>
+      <tr class="header-row">
+        <td>A</td>
+        <td>B</td>
+        <td>A NAND B</td>
+      </tr>
+      <tr>
+        <td class="value-0">0</td>
+        <td class="value-0">0</td>
+        <td class="value-1">1</td>
+      </tr>
+      <tr>
+        <td class="value-0">0</td>
+        <td class="value-1">1</td>
+        <td class="value-1">1</td>
+      </tr>
+      <tr>
+        <td class="value-1">1</td>
+        <td class="value-0">0</td>
+        <td class="value-1">1</td>
+      </tr>
+      <tr>
+        <td class="value-1">1</td>
+        <td class="value-1">1</td>
+        <td class="value-0">0</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
