@@ -195,14 +195,18 @@ async fn run() {
     // Movement Cycle: (offset_x, offset_y, axis)
     // axis: 0 = Top (Vertical), 1 = Bottom (Horizontal)
     let moves = [
-        // 2x2 Cycle (8 steps)
-        (0, 1, 0), (0, 2, 0), // Up
-        (1, 2, 1), (2, 2, 1), // Right
-        (2, 1, 0), (2, 0, 0), // Down
-        (1, 0, 1), (0, 0, 1), // Left
+        // 3x3 Clockwise Cycle (8 steps)
+        (0, 0, 0), // (0,0)
+        (1, 0, 1), // (1,0)
+        (2, 0, 0), // (2,0)
+        (2, 1, 1), // (2,1)
+        (2, 2, 0), // (2,2)
+        (1, 2, 1), // (1,2)
+        (0, 2, 0), // (0,2)
+        (0, 1, 1), // (0,1)
     ];
 
-    let total_frames = 2000;
+    let total_frames = 5000;
     let mut top_ops = 0;
     let mut bottom_ops = 0;
 
