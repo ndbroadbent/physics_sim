@@ -35,22 +35,26 @@ async fn run() {
     let mut top_data = vec![0u32; (WIDTH * HEIGHT) as usize];
     let mut bottom_data = vec![1u32; (WIDTH * HEIGHT) as usize];
 
-    // Flip one bit in Top layer (fixed offset left)
+    // Flip one random bit in Top layer (0 -> 1)
     {
-        let cx = WIDTH / 3;
-        let cy = HEIGHT / 2;
-        let idx = (cy * WIDTH + cx) as usize;
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        let rx = rng.gen_range(0..WIDTH);
+        let ry = rng.gen_range(0..HEIGHT);
+        let idx = (ry * WIDTH + rx) as usize;
         top_data[idx] = 1;
-        println!("Initialized bit in Top layer at ({}, {})", cx, cy);
+        println!("Initialized random bit in Top layer at ({}, {})", rx, ry);
     }
     
-    // Flip one bit in Bottom layer (fixed offset right)
+    // Flip one random bit in Bottom layer (1 -> 0)
     {
-        let cx = 2 * WIDTH / 3;
-        let cy = HEIGHT / 2;
-        let idx = (cy * WIDTH + cx) as usize;
-        bottom_data[idx] = 0; 
-        println!("Initialized bit in Bottom layer at ({}, {})", cx, cy);
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        let rx = rng.gen_range(0..WIDTH);
+        let ry = rng.gen_range(0..HEIGHT);
+        let idx = (ry * WIDTH + rx) as usize;
+        bottom_data[idx] = 0;
+        println!("Initialized random bit in Bottom layer at ({}, {})", rx, ry);
     }
     
     // Create Buffers (Ping-Pong: A -> B -> A)
@@ -170,6 +174,8 @@ async fn run() {
     });
 
     // 4. Simulation Loop
+    let mut offset_x = 0;
+    let mut offset_y = 0;
     
     // We create the param buffer once and update it? Or create new one every time?
     // Updating is better.
@@ -186,19 +192,54 @@ async fn run() {
         std::fs::create_dir(frames_dir).unwrap();
     }
 
-    let total_frames = 1000;
+    // Movement Cycle: (offset_x, offset_y, axis)
+    // axis: 0 = Top (Vertical), 1 = Bottom (Horizontal)
+    let moves = [
+        // 2x2 Cycle (8 steps)
+        (0, 1, 0), (0, 2, 0), // Up
+        (1, 2, 1), (2, 2, 1), // Right
+        (2, 1, 0), (2, 0, 0), // Down
+        (1, 0, 1), (0, 0, 1), // Left
+    ];
+    
+    let total_frames = 100;
+    let mut top_ops = 0;
+    let mut bottom_ops = 0;
     
     for frame in 0..total_frames {
-        // Alternate between updating Top (0) and Bottom (1)
-        let step_type = (frame % 2) as u32;
+        let step = frame % 8;
+        let (ox, oy, axis) = moves[step as usize];
+        offset_x = ox;
+        offset_y = oy;
+
+        let step_type = if axis == 0 {
+            // Top Layer: Sequence AND, NOR, XNOR
+            let op = match top_ops % 3 {
+                0 => 0, // AND
+                1 => 2, // NOR
+                _ => 5, // XNOR
+            };
+            top_ops += 1;
+            op
+        } else {
+            // Bottom Layer: Sequence OR, NAND, XOR
+            let op = match bottom_ops % 3 {
+                0 => 1, // OR
+                1 => 3, // NAND
+                _ => 4, // XOR
+            };
+            bottom_ops += 1;
+            op
+        };
         
         // Update Params
         let params = SimParams {
             width: WIDTH,
             height: HEIGHT,
+            offset_x,
+            offset_y,
             step_type,
-            frame: frame as u32,
-            _padding: [0; 4],
+            _padding: [0; 3],
         };
         queue.write_buffer(&params_buffer, 0, bytemuck::bytes_of(&params));
         
