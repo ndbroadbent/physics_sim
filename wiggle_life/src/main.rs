@@ -35,20 +35,18 @@ async fn run() {
     let mut top_data = vec![0u32; (WIDTH * HEIGHT) as usize];
     let mut bottom_data = vec![1u32; (WIDTH * HEIGHT) as usize];
 
-    // Flip one bit in Top layer (center)
-    /*
+    // Flip one bit in Top layer (fixed offset left)
     {
-        let cx = WIDTH / 2;
+        let cx = WIDTH / 3;
         let cy = HEIGHT / 2;
         let idx = (cy * WIDTH + cx) as usize;
         top_data[idx] = 1;
         println!("Initialized bit in Top layer at ({}, {})", cx, cy);
     }
-    */
     
-    // Flip one bit in Bottom layer (center)
+    // Flip one bit in Bottom layer (fixed offset right)
     {
-        let cx = WIDTH / 2;
+        let cx = 2 * WIDTH / 3;
         let cy = HEIGHT / 2;
         let idx = (cy * WIDTH + cx) as usize;
         bottom_data[idx] = 0; 
@@ -188,7 +186,7 @@ async fn run() {
         std::fs::create_dir(frames_dir).unwrap();
     }
 
-    let total_frames = 100;
+    let total_frames = 1000;
     
     for frame in 0..total_frames {
         // Alternate between updating Top (0) and Bottom (1)
@@ -199,7 +197,8 @@ async fn run() {
             width: WIDTH,
             height: HEIGHT,
             step_type,
-            _padding: [0; 5],
+            frame: frame as u32,
+            _padding: [0; 4],
         };
         queue.write_buffer(&params_buffer, 0, bytemuck::bytes_of(&params));
         
