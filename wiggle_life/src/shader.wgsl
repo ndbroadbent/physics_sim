@@ -4,9 +4,9 @@ struct SimParams {
     offset_x: i32,
     offset_y: i32,
     step_type: u32, // 0 = Update Top, 1 = Update Bottom
+    frame: u32, // Added frame parameter
     pad1: u32,
     pad2: u32,
-    pad3: u32,
 };
 
 @group(0) @binding(0) var<uniform> params: SimParams;
@@ -24,6 +24,14 @@ fn get_idx(x: i32, y: i32) -> u32 {
     return u32(wy * w + wx);
 }
 
+// Simple Hash Function for Deterministic "Randomness"
+fn hash(x: u32, y: u32, t: u32) -> f32 {
+    var state = x * 747796405u + y * 2891336453u + t * 13u;
+    var word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    word = (word >> 22u) ^ word;
+    return f32(word) / 4294967295.0;
+}
+
 @compute @workgroup_size(16, 16)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let x = i32(global_id.x);
@@ -34,6 +42,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     let idx = get_idx(x, y);
+
+    let is_inflation = params.frame < 500u;
+    let quantum_alpha = 0.33; // 33% chance of tunneling
+    let rnd = hash(u32(x), u32(y), params.frame);
+    let is_tunneling = rnd < quantum_alpha;
+    
+    let use_xor_logic = is_inflation || is_tunneling;
     
     // Logic Split based on which layer we are updating
     if (params.step_type == 0u || params.step_type == 2u || params.step_type == 5u) {
@@ -50,8 +65,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             result = u32(val_top != 0u && val_bottom != 0u);
         } else if (params.step_type == 2u) { // NOR
             result = u32(!(val_top != 0u || val_bottom != 0u));
-        } else { // XNOR (5)
-            result = u32((val_top != 0u) == (val_bottom != 0u));
+        } else { // XNOR (5) or NOR (Standard Model)
+            if (use_xor_logic) {
+                result = u32((val_top != 0u) == (val_bottom != 0u)); // XNOR
+            } else {
+                result = u32(!(val_top != 0u || val_bottom != 0u)); // NOR
+            }
         }
         
         top_out[idx] = result;
@@ -71,8 +90,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             result = u32(val_top != 0u || val_bottom != 0u);
         } else if (params.step_type == 3u) { // NAND
             result = u32(!(val_top != 0u && val_bottom != 0u));
-        } else { // XOR (4)
-            result = u32((val_top != 0u) != (val_bottom != 0u));
+        } else { // XOR (4) or NAND (Standard Model)
+            if (use_xor_logic) {
+                result = u32((val_top != 0u) != (val_bottom != 0u)); // XOR
+            } else {
+                result = u32(!(val_top != 0u && val_bottom != 0u)); // NAND
+            }
         }
         
         bottom_out[idx] = result;

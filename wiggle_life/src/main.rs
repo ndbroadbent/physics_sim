@@ -39,22 +39,22 @@ async fn run() {
     {
         use rand::Rng;
         let mut rng = rand::thread_rng();
-        let rx = rng.gen_range(0..WIDTH);
-        let ry = rng.gen_range(0..HEIGHT);
-        let idx = (ry * WIDTH + rx) as usize;
+        let cx = WIDTH / 2;
+        let cy = HEIGHT / 2;
+        let idx = (cy * WIDTH + cx) as usize;
         top_data[idx] = 1;
-        println!("Initialized random bit in Top layer at ({}, {})", rx, ry);
+        println!("Initialized random bit in Top layer at ({}, {})", cx, cy);
     }
     
     // Flip one random bit in Bottom layer (1 -> 0)
     {
         use rand::Rng;
         let mut rng = rand::thread_rng();
-        let rx = rng.gen_range(0..WIDTH);
-        let ry = rng.gen_range(0..HEIGHT);
-        let idx = (ry * WIDTH + rx) as usize;
+        let cx = WIDTH / 2;
+        let cy = HEIGHT / 2;
+        let idx = (cy * WIDTH + cx) as usize;
         bottom_data[idx] = 0;
-        println!("Initialized random bit in Bottom layer at ({}, {})", rx, ry);
+        println!("Initialized random bit in Bottom layer at ({}, {})", cx, cy);
     }
     
     // Create Buffers (Ping-Pong: A -> B -> A)
@@ -202,7 +202,7 @@ async fn run() {
         (1, 0, 1), (0, 0, 1), // Left
     ];
     
-    let total_frames = 100;
+    let total_frames = 1000;
     let mut top_ops = 0;
     let mut bottom_ops = 0;
     
@@ -239,7 +239,8 @@ async fn run() {
             offset_x,
             offset_y,
             step_type,
-            _padding: [0; 3],
+            frame: frame as u32,
+            _padding: [0; 2],
         };
         queue.write_buffer(&params_buffer, 0, bytemuck::bytes_of(&params));
         
