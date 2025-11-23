@@ -21,31 +21,40 @@ function App() {
   const [valB, setValB] = useState(0);
   const [delay, setDelay] = useState(50);
 
-  // Calculate static connections for UI wires (Chip -> Bit Gates)
+  // Calculate static connections for UI wires
+  // We pass 'logicGateId' to tell the overlay which gate's value determines the color.
   const staticConnections = useMemo(() => {
       const conns = [];
       // Connect Input A Chip to A Gates
       for (let i = 0; i < 8; i++) {
-          conns.push({ from: `INPUT A-out-${i}`, to: `gate-A${i}-fake-in`, color: '#666' });
+          conns.push({
+              from: `INPUT A-out-${i}`,
+              to: `gate-A${i}-fake-in`,
+              logicGateId: `A${i}` // Color determined by Gate A{i}
+          });
       }
       // Connect Input B Chip to B Gates
       for (let i = 0; i < 8; i++) {
-          conns.push({ from: `INPUT B-out-${i}`, to: `gate-B${i}-fake-in`, color: '#666' });
+          conns.push({
+              from: `INPUT B-out-${i}`,
+              to: `gate-B${i}-fake-in`,
+              logicGateId: `B${i}`
+          });
       }
-      // Connect Output Gates to Sum Chip (Gates have Out port, Chip has In port)
-      // S0..S7 -> SUM-in-0..7
+      // Connect Output Gates to Sum Chip
       for (let i = 0; i < 8; i++) {
-          conns.push({ from: `gate-S${i}`, to: `SUM-in-${i}`, color: '#666' }); // Gate S{i} target center? Or out port?
-          // Output gates have 'in-0' (top) and 'out' (none? or visually hidden?). 
-          // Actually, Output Gates are sinks in the circuit. They receive FROM the adder.
-          // But for the Sum Chip, the Sum Chip READS from the Output Gates.
-          // Visually: Output Gate -> Sum Chip.
-          // Output Gate has standard structure. 'in-0' is connected to adder.
-          // We can assume the "body" of the Output Gate connects to the Sum Chip.
-          // Let's target the gate element itself. StaticWireOverlay handles gate IDs.
+          conns.push({
+              from: `gate-S${i}`,
+              to: `SUM-in-${i}`,
+              logicGateId: `S${i}`
+          });
       }
       // Overflow
-      conns.push({ from: `gate-${layout.coutId}`, to: `SUM-in-8`, color: '#844' }); // Overflow bit
+      conns.push({
+          from: `gate-${layout.coutId}`,
+          to: `SUM-in-8`,
+          logicGateId: layout.coutId
+      });
 
       return conns;
   }, [layout]);
@@ -61,6 +70,8 @@ function App() {
   useEffect(() => {
       sim.reset();
   }, [sim]);
+  
+  // ... rest of file ...
 
   // Sync inputs
   const updateInputs = (a: number, b: number) => {

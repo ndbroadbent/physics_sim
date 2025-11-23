@@ -1,21 +1,21 @@
 import React, { useEffect, useState } from 'react';
-
-// Draws static "UI" wires between two sets of elements identified by ID patterns.
-// e.g. "INPUT A-out-0" -> "A0-in-0" (Wait, A0 input gate has input port?) 
-// No, Input Gates are sources. They have OUTPUT ports.
-// The Chip is the *User Interface* source. The Gate is the *Circuit* source.
-// Conceptually: Chip -> Gate.
-// Gate type=INPUT has a port class "out" at bottom (modified in css).
-// We need a place to connect TO on the Input Gate. 
-// Let's assume we connect Chip-Right to Gate-Left (or Top?).
-// Input Gates don't have Input Ports in the sim. Visual only.
-// We can target the center of the gate or add a "fake" input port to the Gate component visual.
+import { useSimulator } from '../hooks/useCircuit';
 
 export const StaticWireOverlay: React.FC<{
-  connections: Array<{ from: string, to: string, color?: string }>;
+  connections: Array<{ from: string, to: string, logicGateId?: string }>;
   containerRef: React.RefObject<HTMLDivElement | null>;
 }> = ({ connections, containerRef }) => {
+    const sim = useSimulator();
     const [paths, setPaths] = useState<React.ReactElement[]>([]);
+
+    // Hack: useSyncExternalStore might not trigger if we just return sim.state.
+    // We need to force update.
+    // Actually, we can just use a simple effect that subscribes and forces update.
+    const [version, setVersion] = useState(0);
+    useEffect(() => {
+        return sim.subscribe(() => setVersion(v => v + 1));
+    }, [sim]);
+
 
     const update = () => {
         if (!containerRef.current) return;
@@ -24,8 +24,6 @@ export const StaticWireOverlay: React.FC<{
 
         connections.forEach((conn, i) => {
             const fromEl = document.getElementById(conn.from);
-            // For 'to', if it's a Gate ID, we might want to target the element itself or a specific sub-element.
-            // If 'to' is "gate-A0", we target center.
             const toEl = document.getElementById(conn.to);
 
             if (fromEl && toEl) {
@@ -41,23 +39,28 @@ export const StaticWireOverlay: React.FC<{
                     y: dstRect.top + dstRect.height / 2 - containerRect.top
                 };
 
-                // Simple Bezier
-                // Right to Left?
-                // Chip is left, Gate is right.
-                // p1 is Left (Chip Right Port). p2 is Right (Gate).
                 const cp1 = { x: p1.x + 30, y: p1.y };
                 const cp2 = { x: p2.x - 30, y: p2.y };
                 
                 const d = `M ${p1.x} ${p1.y} C ${cp1.x} ${cp1.y}, ${cp2.x} ${cp2.y}, ${p2.x} ${p2.y}`;
                 
+                // Determine Color
+                let stroke = "#444"; // Default off/unknown
+                if (conn.logicGateId) {
+                    const val = sim.state.gates[conn.logicGateId]?.value;
+                    if (val === 1) stroke = "#4f4"; // High
+                    else if (val === 0) stroke = "#933"; // Low
+                }
+
                 newPaths.push(
                     <path 
                         key={i} 
                         d={d} 
-                        stroke={conn.color || "#444"} 
-                        strokeWidth="2" 
+                        stroke={stroke} 
+                        strokeWidth="1" // Thinner
                         fill="none" 
                         strokeLinecap="round"
+                        style={{ transition: 'stroke 0.2s' }}
                     />
                 );
             }
@@ -66,7 +69,6 @@ export const StaticWireOverlay: React.FC<{
     };
 
     useEffect(() => {
-        // Update on mount/resize
         const t = setTimeout(update, 200);
         window.addEventListener('resize', update);
         const observer = new ResizeObserver(update);
@@ -76,7 +78,7 @@ export const StaticWireOverlay: React.FC<{
             window.removeEventListener('resize', update);
             observer.disconnect();
         };
-    }, [containerRef, connections]); // Re-run if connections change
+    }, [containerRef, connections, version]); // Re-run on version change
 
     return (
         <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 0 }}>

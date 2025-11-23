@@ -22,9 +22,11 @@ export const InputNumberBox: React.FC<InputNumberBoxProps> = ({ label, value, on
       />
       {/* Output Ports on the Right */}
       <div className="chip-ports-right">
-          {Array.from({ length: bitCount }).map((_, i) => (
-              <div key={i} className="chip-port" id={`${label}-out-${i}`} />
-          ))}
+          {Array.from({ length: bitCount }).map((_, i) => {
+              const bit = (value >> i) & 1;
+              const statusClass = bit === 1 ? 'high' : 'low';
+              return <div key={i} className={`chip-port ${statusClass}`} id={`${label}-out-${i}`} />
+          })}
       </div>
     </div>
   );
@@ -48,9 +50,16 @@ export const OutputNumberBox: React.FC<OutputNumberBoxProps> = ({ label, value, 
       
       {/* Input Ports on the Left */}
       <div className="chip-ports-left">
-          {Array.from({ length: bitCount + 1 }).map((_, i) => ( // +1 for Overflow bit
-              <div key={i} className="chip-port" id={`${label}-in-${i}`} />
-          ))}
+          {Array.from({ length: bitCount + 1 }).map((_, i) => { // +1 for Overflow bit
+              let bit = 0;
+              if (i < bitCount) {
+                  bit = (value >> i) & 1;
+              } else {
+                  bit = overflow ? 1 : 0;
+              }
+              const statusClass = bit === 1 ? 'high' : 'low';
+              return <div key={i} className={`chip-port ${statusClass}`} id={`${label}-in-${i}`} />
+          })}
       </div>
     </div>
   );
