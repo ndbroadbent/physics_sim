@@ -196,40 +196,33 @@ async fn run() {
         std::fs::create_dir(frames_dir).unwrap();
     }
 
-    // 2x2x2 "Twisted Loop" Cycle
-    let moves = [
-        (0, 0, 0, 1), // Top-Left-Front (Start, now Bottom updates first)
-        (1, 0, 0, 1), // Top-Right-Front
-        (1, 1, 0, 0), // Top-Right-Back
-        (0, 1, 0, 1), // Top-Left-Back
-        (0, 1, 1, 0), // Bot-Left-Back (Drop)
-        (1, 1, 1, 1), // Bot-Right-Back
-        (1, 0, 1, 0), // Bot-Right-Front
-        (0, 0, 1, 1), // Bot-Left-Front (Up to start)
-    ];
-
     let total_frames = 1000;
     let mut top_ops = 0;
     let mut bottom_ops = 0;
 
     for frame in 0..total_frames {
-        let step = frame % 8;
-        let (ox, oy, oz, axis) = moves[step as usize];
-
+        // Xorshift Chaotic Wiggle
+        let mut state = (frame as u32).wrapping_add(123456789); // Seed
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        
+        let ox = (state % 3) as i32 - 1; // -1, 0, 1
+        let oy = ((state >> 2) % 3) as i32 - 1;
+        let oz = ((state >> 4) % 3) as i32 - 1;
+        let axis = (state >> 6) % 2; // 0 or 1
         // Logic Ops (Standard Model)
         let (step_type, op_name) = if axis == 0 {
-            let (op, name) = match top_ops % 3 {
-                0 => (3, "NOR"),
-                1 => (2, "NOR"),
-                _ => (5, "XNOR")
+            let (op, name) = match top_ops % 2 {
+                0 => (5, "XNOR"), // Stable & Preserves Seed
+                _ => (2, "NOR")   // Stable & Carves
             };
             top_ops += 1;
             (op, name)
         } else {
-            let (op, name) = match bottom_ops % 3 {
-                0 => (3, "NAND"),
-                1 => (3, "NAND"),
-                _ => (4, "XOR")
+            let (op, name) = match bottom_ops % 2 {
+                0 => (4, "XOR"),  // Stable & Preserves Seed
+                _ => (3, "NAND")  // Stable & Carves
             };
             bottom_ops += 1;
             (op, name)
