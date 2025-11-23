@@ -4,7 +4,8 @@ import { useSimulator } from '../hooks/useCircuit';
 export const StaticWireOverlay: React.FC<{
   connections: Array<{ from: string, to: string, logicGateId?: string }>;
   containerRef: React.RefObject<HTMLDivElement | null>;
-}> = ({ connections, containerRef }) => {
+  zoom: number;
+}> = ({ connections, containerRef, zoom }) => {
     const sim = useSimulator();
     const [paths, setPaths] = useState<React.ReactElement[]>([]);
 
@@ -18,7 +19,7 @@ export const StaticWireOverlay: React.FC<{
 
 
     const update = () => {
-        if (!containerRef.current) return;
+        if (!containerRef.current || !zoom) return;
         const containerRect = containerRef.current.getBoundingClientRect();
         const newPaths: React.ReactElement[] = [];
 
@@ -31,12 +32,12 @@ export const StaticWireOverlay: React.FC<{
                 const dstRect = toEl.getBoundingClientRect();
 
                 const p1 = {
-                    x: srcRect.left + srcRect.width / 2 - containerRect.left,
-                    y: srcRect.top + srcRect.height / 2 - containerRect.top
+                    x: (srcRect.left + srcRect.width / 2 - containerRect.left) / zoom,
+                    y: (srcRect.top + srcRect.height / 2 - containerRect.top) / zoom
                 };
                 const p2 = {
-                    x: dstRect.left + dstRect.width / 2 - containerRect.left,
-                    y: dstRect.top + dstRect.height / 2 - containerRect.top
+                    x: (dstRect.left + dstRect.width / 2 - containerRect.left) / zoom,
+                    y: (dstRect.top + dstRect.height / 2 - containerRect.top) / zoom
                 };
 
                 const cp1 = { x: p1.x + 30, y: p1.y };
@@ -78,7 +79,7 @@ export const StaticWireOverlay: React.FC<{
             window.removeEventListener('resize', update);
             observer.disconnect();
         };
-    }, [containerRef, connections, version]); // Re-run on version change
+    }, [containerRef, connections, version, zoom]); // Re-run on version change
 
     return (
         <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 0 }}>

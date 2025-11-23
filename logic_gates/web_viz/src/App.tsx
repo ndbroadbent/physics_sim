@@ -20,9 +20,13 @@ function App() {
   const [valA, setValA] = useState(0);
   const [valB, setValB] = useState(0);
   const [delay, setDelay] = useState(50);
+  const [zoom, setZoom] = useState(1); // Zoom is now a multiplier, 1 = 100%
+  const [baseZoom, setBaseZoom] = useState(1); // The calculated "fit-to-screen" scale
+
+  const circuitContainerRef = useRef<HTMLDivElement>(null);
+  const innerCircuitRef = useRef<HTMLDivElement>(null);
 
   // Calculate static connections for UI wires
-  // We pass 'logicGateId' to tell the overlay which gate's value determines the color.
   const staticConnections = useMemo(() => {
       const conns = [];
       // Connect Input A Chip to A Gates
@@ -59,20 +63,38 @@ function App() {
       return conns;
   }, [layout]);
 
-  const containerRef = useRef<HTMLDivElement>(null);
-
   // Sync delay
   useEffect(() => {
     sim.delayMs = delay;
   }, [delay, sim]);
 
-  // Initial setup
+  // Initial setup and Fit-to-Screen Zoom calculation
   useEffect(() => {
       sim.reset();
+      
+      // Calculate fit-to-screen zoom after a short delay to allow layout to settle
+      setTimeout(() => {
+          if (circuitContainerRef.current && innerCircuitRef.current) {
+              const containerW = circuitContainerRef.current.clientWidth;
+              const containerH = circuitContainerRef.current.clientHeight;
+              const contentW = innerCircuitRef.current.scrollWidth;
+              const contentH = innerCircuitRef.current.scrollHeight;
+
+              const scaleX = containerW / contentW;
+              const scaleY = containerH / contentH;
+              
+              const newBaseZoom = Math.min(scaleX, scaleY);
+              
+              // If calculated zoom is reasonable, use it. Otherwise default to 0.72.
+              if (newBaseZoom > 0.1 && newBaseZoom <= 1) {
+                  setBaseZoom(newBaseZoom);
+              } else {
+                  setBaseZoom(0.72); // Fallback
+              }
+          }
+      }, 100);
   }, [sim]);
   
-  // ... rest of file ...
-
   // Sync inputs
   const updateInputs = (a: number, b: number) => {
     for (let i = 0; i < 8; i++) {
@@ -111,24 +133,29 @@ function App() {
       setValA(0);
       setValB(0);
   };
+  
+  const handleZoom = (direction: 'in' | 'out') => {
+      setZoom(z => {
+          const newZoom = direction === 'in' ? z + 0.1 : z - 0.1;
+          return Math.min(3, Math.max(0.2, newZoom)); // Clamp multiplier
+      });
+  };
 
   const toggleBit = (val: number, setVal: (v: number) => void, bit: number) => {
     setVal(val ^ (1 << bit));
   };
 
   // Speed Slider Logic: Invert
-  // Slider Left (10) -> Slow (500ms)
-  // Slider Right (500) -> Fast (10ms)
   const sliderVal = 510 - delay;
   const handleSpeedChange = (v: number) => {
       setDelay(510 - v);
   };
+  
+  const effectiveZoom = baseZoom * zoom;
 
   return (
     <SimulatorProvider simulator={sim}>
       <div className="app-container">
-        {/* Moved controls to simple floating bar or integrated? User wanted boxes in graph. 
-            We'll keep speed/reset floating for utility. */}
         <div className="controls" style={{ position: 'absolute', top: 0, right: 0, width: 'auto', background: 'transparent', border: 'none' }}>
             <div className="control-group range" style={{ background: '#111', padding: '10px', borderRadius: '0 0 0 8px', border: '1px solid #333' }}>
                  <label>Speed</label>
@@ -139,15 +166,22 @@ function App() {
                     value={sliderVal} 
                     onChange={e => handleSpeedChange(Number(e.target.value))} 
                  />
+                 <button className="btn-zoom" onClick={() => handleZoom('out')}>-</button>
+                 <span style={{ margin: '0 5px', minWidth: '40px', textAlign: 'center' }}>{Math.round(zoom*100)}%</span>
+                 <button className="btn-zoom" onClick={() => handleZoom('in')}>+</button>
                  <button className="btn-restart" onClick={handleClear} style={{ marginLeft: '10px', background: '#666' }}>CLEAR</button>
                  <button className="btn-restart" onClick={handleReset} style={{ marginLeft: '10px' }}>RESET</button>
             </div>
         </div>
 
-        <div className="circuit-container">
-             <div className="inner-circuit" ref={containerRef}>
-                 <WireOverlay containerRef={containerRef} />
-                 <StaticWireOverlay connections={staticConnections} containerRef={containerRef} />
+        <div className="circuit-container" ref={circuitContainerRef}>
+             <div 
+                className="inner-circuit" 
+                ref={innerCircuitRef} 
+                style={{ transform: `scale(${effectiveZoom})`, transformOrigin: 'top left' }}
+             >
+                 <WireOverlay containerRef={innerCircuitRef} zoom={effectiveZoom} />
+                 <StaticWireOverlay connections={staticConnections} containerRef={innerCircuitRef} zoom={effectiveZoom} />
 
                  <div className="section inputs-section" style={{ display: 'flex', justifyContent: 'center', gap: '60px', alignItems: 'flex-start' }}>
                      {/* Input A Block */}

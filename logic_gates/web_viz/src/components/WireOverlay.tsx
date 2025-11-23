@@ -49,14 +49,17 @@ const WirePath: React.FC<{ wire: Wire, p1: Point, p2: Point }> = ({ wire, p1, p2
   );
 };
 
-export const WireOverlay: React.FC<{ containerRef: React.RefObject<HTMLDivElement | null> }> = ({ containerRef }) => {
+export const WireOverlay: React.FC<{ 
+    containerRef: React.RefObject<HTMLDivElement | null>;
+    zoom: number; 
+}> = ({ containerRef, zoom }) => {
   const sim = useSimulator();
   const [positions, setPositions] = useState<Record<string, {start: Point, end: Point}>>({});
 
   // Use a resize observer to update positions
   useEffect(() => {
     const updatePositions = () => {
-      if (!containerRef.current) return;
+      if (!containerRef.current || !zoom) return;
       const containerRect = containerRef.current.getBoundingClientRect();
       const newPositions: Record<string, {start: Point, end: Point}> = {};
 
@@ -72,12 +75,12 @@ export const WireOverlay: React.FC<{ containerRef: React.RefObject<HTMLDivElemen
 
           newPositions[wire.id] = {
             start: {
-              x: srcRect.left + srcRect.width / 2 - containerRect.left,
-              y: srcRect.top + srcRect.height / 2 - containerRect.top
+              x: (srcRect.left + srcRect.width / 2 - containerRect.left) / zoom,
+              y: (srcRect.top + srcRect.height / 2 - containerRect.top) / zoom
             },
             end: {
-              x: dstRect.left + dstRect.width / 2 - containerRect.left,
-              y: dstRect.top + dstRect.height / 2 - containerRect.top
+              x: (dstRect.left + dstRect.width / 2 - containerRect.left) / zoom,
+              y: (dstRect.top + dstRect.height / 2 - containerRect.top) / zoom
             }
           };
         }
@@ -101,7 +104,7 @@ export const WireOverlay: React.FC<{ containerRef: React.RefObject<HTMLDivElemen
       observer.disconnect();
       window.removeEventListener('resize', updatePositions);
     };
-  }, [sim, containerRef]); 
+  }, [sim, containerRef, zoom]); // Re-calculate on zoom change
 
   return (
     <svg className="wire-overlay" style={{
