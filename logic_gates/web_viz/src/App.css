@@ -37,7 +37,7 @@
   &.app-container {
     display: flex;
     position: relative;
-    height: 800px;
+    height: 950px;
     width: 100%;
     overflow: hidden;
   }

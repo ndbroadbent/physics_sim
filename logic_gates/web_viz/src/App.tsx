@@ -55,15 +55,21 @@ function App() {
 
             setContentSize({ w: contentW, h: contentH });
 
-            const scaleX = (containerW - 80) / contentW; // 80px padding
-            const scaleY = (containerH - 80) / contentH;
+                                                            const scaleX = (containerW - 10) / contentW; // 10px total padding (5px per side)
 
-            const newBaseZoom = Math.min(scaleX, scaleY);
+                                                            const scaleY = (containerH - 10) / contentH;
 
-            if (newBaseZoom > 0.1 && newBaseZoom <= 1) {
-                setBaseZoom(newBaseZoom);
-            }
-            setIsReady(true);
+                                    
+
+                                    const newBaseZoom = Math.min(scaleX, scaleY);
+
+                                    
+
+                                    if (newBaseZoom > 0.1 && newBaseZoom <= 2) {
+
+                                        setBaseZoom(newBaseZoom);
+
+                                    }            setIsReady(true);
         }
     }, 150);
     return () => clearTimeout(timer);
