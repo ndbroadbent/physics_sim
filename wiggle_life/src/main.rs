@@ -56,8 +56,17 @@ async fn run() {
         let idx = (cz * DIM_Y * DIM_X + cy * DIM_X + cx) as usize;
 
         top_data[idx] = 1;
-        bottom_data[idx] = 0;
-        println!("Initialized seeds at ({}, {}, {})", cx, cy, cz);
+        println!("Initialized seed in Top layer at ({}, {}, {})", cx, cy, cz);
+    }
+
+    // Second Top Seed (1) at (12, 42, 7)
+    {
+        let cx2 = 12;
+        let cy2 = 42;
+        let cz2 = 7;
+        let idx2 = (cz2 * DIM_Y * DIM_X + cy2 * DIM_X + cx2) as usize;
+        top_data[idx2] = 1;
+        println!("Initialized second seed in Top layer at ({}, {}, {})", cx2, cy2, cz2);
     }
 
     let buffer_size = (vol_size * std::mem::size_of::<u32>()) as u64;
@@ -187,13 +196,19 @@ async fn run() {
         std::fs::create_dir(frames_dir).unwrap();
     }
 
-    // 3D Gyroscope Cycle
+    // 2x2x2 "Twisted Loop" Cycle
     let moves = [
-        (0, 0, 0, 0), (1, 0, 0, 1), (1, 1, 0, 0), (0, 1, 0, 1),
-        (0, 1, 1, 0), (0, 0, 1, 1), (1, 0, 1, 0), (1, 1, 1, 1),
+        (0, 0, 0, 1), // Top-Left-Front (Start, now Bottom updates first)
+        (1, 0, 0, 1), // Top-Right-Front
+        (1, 1, 0, 0), // Top-Right-Back
+        (0, 1, 0, 1), // Top-Left-Back
+        (0, 1, 1, 0), // Bot-Left-Back (Drop)
+        (1, 1, 1, 1), // Bot-Right-Back
+        (1, 0, 1, 0), // Bot-Right-Front
+        (0, 0, 1, 1), // Bot-Left-Front (Up to start)
     ];
 
-    let total_frames = 5000;
+    let total_frames = 1000;
     let mut top_ops = 0;
     let mut bottom_ops = 0;
 
@@ -204,17 +219,17 @@ async fn run() {
         // Logic Ops (Standard Model)
         let (step_type, op_name) = if axis == 0 {
             let (op, name) = match top_ops % 3 {
-                0 => (0, "AND"),
+                0 => (3, "NOR"),
                 1 => (2, "NOR"),
-                _ => (5, "XNOR") // Always XNOR
+                _ => (5, "XNOR")
             };
             top_ops += 1;
             (op, name)
         } else {
             let (op, name) = match bottom_ops % 3 {
-                0 => (1, "OR"),
+                0 => (3, "NAND"),
                 1 => (3, "NAND"),
-                _ => (4, "XOR") // Always XOR
+                _ => (4, "XOR")
             };
             bottom_ops += 1;
             (op, name)
@@ -360,14 +375,19 @@ async fn run() {
         }
 
         // Draw Debug Text
-                        let layer_name = if axis == 0 { "TOP" } else { "BOT" };
-                        let debug_text = format!("T={:04} | L:{: <3} | Op:{: <9}",
-                            frame, layer_name, op_name);
-                let scale = PxScale::from(20.0);
+        let layer_name = if axis == 0 { "TOP" } else { "BOT" };
+        let debug_text = format!("T={:04} | L:{: <3} | Op:{: <9}", frame, layer_name, op_name);
+
+        let scale = PxScale::from(20.0);
         draw_text_mut(&mut img, Rgb([255, 255, 0]), 10, 10, scale, &font, &debug_text);
 
         img.save(format!("{}/frame_{:05}.png", frames_dir, frame)).unwrap();
-        if frame % 50 == 0 { println!("Rendered frame {}", frame); }
+
+        if frame % 10 == 0 {
+            let top_ones: u32 = top_slice.iter().sum();
+            let bottom_zeros: u32 = bottom_slice.iter().map(|&x| 1u32 - x).sum();
+            println!("Frame {}: Top Ones = {}, Bottom Zeros = {}", frame, top_ones, bottom_zeros);
+        }
     }
     println!("Done!");
 }

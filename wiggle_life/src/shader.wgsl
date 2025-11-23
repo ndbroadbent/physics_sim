@@ -6,9 +6,7 @@ struct SimParams {
     offset_y: i32,
     offset_z: i32,
     step_type: u32, 
-    frame: u32, // Still used for temporal wobble
-    pad1: u32,
-    pad2: u32,
+    frame: u32, 
 };
 
 @group(0) @binding(0) var<uniform> params: SimParams;
