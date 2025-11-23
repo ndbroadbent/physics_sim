@@ -21,6 +21,9 @@
     linear-gradient(rgba(30,30,35, 1) 1px, transparent 1px),
     linear-gradient(90deg, rgba(30,30,35, 1) 1px, transparent 1px);
   background-size: 20px 20px;
+  padding-top: 60px; /* Add space for controls */
+  display: flex;
+  justify-content: center;
 }
 
 /* This wrapper's dimensions are set via inline style to match the *unscaled* content.
@@ -33,7 +36,13 @@
 /* This contains the actual content and is the element that gets visually scaled. */
 .inner-circuit {
     position: relative;
+    min-width: fit-content;
+    min-height: fit-content;
     padding: 40px;
+    z-index: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
 }
 
 /* --- The rest of the styles --- */

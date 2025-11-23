@@ -15,10 +15,10 @@ import './chips.css';
 function App() {
   const [sim] = useState(() => new CircuitSimulator());
   const layout = useMemo(() => buildAdder(sim, 8), [sim]);
-  
+
   const [valA, setValA] = useState(0);
   const [valB, setValB] = useState(0);
-  const [delay, setDelay] = useState(50);
+  const [delay, setDelay] = useState(30);
   const [zoom, setZoom] = useState(1); // Zoom is now a multiplier, 1 = 100%
   const [baseZoom, setBaseZoom] = useState(0.72); // Start with a sensible default
   const [contentSize, setContentSize] = useState({ w: 0, h: 0 });
@@ -52,14 +52,14 @@ function App() {
             const containerH = circuitContainerRef.current.clientHeight;
             const contentW = innerCircuitRef.current.scrollWidth;
             const contentH = innerCircuitRef.current.scrollHeight;
-            
+
             setContentSize({ w: contentW, h: contentH });
 
             const scaleX = (containerW - 80) / contentW; // 80px padding
             const scaleY = (containerH - 80) / contentH;
-            
+
             const newBaseZoom = Math.min(scaleX, scaleY);
-            
+
             if (newBaseZoom > 0.1 && newBaseZoom <= 1) {
                 setBaseZoom(newBaseZoom);
             }
@@ -68,7 +68,7 @@ function App() {
     }, 150);
     return () => clearTimeout(timer);
   }, [sim]);
-  
+
   const updateInputs = (a: number, b: number) => {
     for (let i = 0; i < 8; i++) {
       const bitA = (a >> i) & 1; const bitB = (b >> i) & 1;
@@ -120,9 +120,9 @@ function App() {
 
         <div className="circuit-container" ref={circuitContainerRef}>
              <div className="inner-circuit-wrapper" style={{ opacity: isReady ? 1 : 0, width: contentSize.w > 0 ? contentSize.w * baseZoom : 'auto', height: contentSize.h > 0 ? contentSize.h * baseZoom : 'auto'}}>
-                <div 
-                    className="inner-circuit" 
-                    ref={innerCircuitRef} 
+                <div
+                    className="inner-circuit"
+                    ref={innerCircuitRef}
                     style={{ transform: `scale(${effectiveZoom})`, transformOrigin: 'top left' }}
                 >
                     <WireOverlay containerRef={innerCircuitRef} zoom={effectiveZoom} />
@@ -176,7 +176,7 @@ const ResultBox: React.FC<{ outputIds: string[], coutId: string }> = ({ outputId
     const sim = useSimulator();
     const [val, setVal] = useState(0);
     const [overflow, setOverflow] = useState(false);
-    
+
     useEffect(() => {
         const unsub = sim.subscribe(() => {
             let sum = 0;
