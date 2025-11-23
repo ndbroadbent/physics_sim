@@ -1,169 +1,68 @@
+/* The main container for the entire embedded app. It must be self-contained. */
 .app-container {
   display: flex;
-  flex-direction: column;
-  height: 100vh;
+  position: relative; /* Establishes the context for absolute positioning inside. */
+  height: 800px; /* Give the component a fixed, predictable height. */
+  width: 100%;
   background-color: #0f0f15;
   color: #eee;
-  overflow: hidden;
+  overflow: hidden; /* Absolutely no overflow from this container. */
 }
 
-.controls {
-  display: flex;
-  gap: 20px;
-  padding: 15px;
-  background: #1a1a20;
-  border-bottom: 1px solid #333;
-  align-items: center;
-  z-index: 100; /* Ensure controls are top */
-}
-
-.control-group {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.control-group label {
-  font-size: 12px;
-  color: #aaa;
-  text-transform: uppercase;
-}
-
-.control-group input[type="number"] {
-  background: #333;
-  border: 1px solid #555;
-  color: white;
-  padding: 5px;
-  border-radius: 4px;
-  font-family: inherit;
-  width: 80px;
-}
-
-.control-group.range {
-    flex-direction: row;
-    align-items: center;
-    gap: 10px;
-}
-
-.btn-restart {
-  margin-left: auto;
-  background: #d33;
-  color: white;
-  border: none;
-  padding: 8px 16px;
-  border-radius: 4px;
-  cursor: pointer;
-  font-weight: bold;
-}
-
-.btn-restart:hover {
-  background: #f44;
-}
-
+/* The viewport for the circuit. It takes up all available space and handles scrolling. */
 .circuit-container {
-  flex: 1;
-  position: relative;
-  overflow: auto; /* Scroll here */
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow: auto;
   background-image:
     linear-gradient(rgba(30,30,35, 1) 1px, transparent 1px),
     linear-gradient(90deg, rgba(30,30,35, 1) 1px, transparent 1px);
   background-size: 20px 20px;
-  padding-top: 90px; /* Add space for controls */
 }
 
+/* This wrapper's dimensions are set via inline style to match the *unscaled* content.
+   This is the element that creates the scrollable area. */
+.inner-circuit-wrapper {
+    position: relative;
+    width: fit-content;
+}
+
+/* This contains the actual content and is the element that gets visually scaled. */
 .inner-circuit {
     position: relative;
-    min-width: fit-content;
-    min-height: fit-content;
     padding: 40px;
-    z-index: 0;
 }
 
-.section {
-  margin-bottom: 40px;
-  position: relative;
-  z-index: 10; /* Ensure sections are above wires */
-  pointer-events: none; /* Let clicks pass through container... */
-}
-/* ...but re-enable for interactive children */
-.section > * {
-    pointer-events: auto;
-}
+/* --- The rest of the styles --- */
+.section { margin-bottom: 40px; }
+.section h3 { margin: 0 0 10px 0; font-size: 14px; color: #666; text-transform: uppercase; letter-spacing: 1px; }
+.inputs-section { display: flex; gap: 40px; }
+.input-block { border: 1px solid #333; padding: 10px; background: rgba(0,0,0,0.5); border-radius: 8px; }
+.bits-row { display: flex; gap: 15px; }
+.stack-container { display: flex; flex-direction: row; gap: 30px; align-items: flex-start; }
+.output-bit-wrapper { display: flex; flex-direction: column; align-items: center; gap: 5px; }
+.bit-label { font-size: 10px; color: #888; }
 
-.section h3 {
-    margin: 0 0 10px 0;
-    font-size: 14px;
-    color: #666;
-    text-transform: uppercase;
-    letter-spacing: 1px;
+/* Styles for the floating controls */
+.controls-wrapper {
+  position: absolute; /* Positioned relative to .app-container */
+  top: 10px;
+  right: 10px;
+  z-index: 100;
 }
-
-.inputs-section {
-    display: flex;
-    gap: 40px;
-    z-index: 20;
-}
-
-.input-block {
-    border: 1px solid #333;
-    padding: 10px;
-    background: rgba(0,0,0,0.5);
-    border-radius: 8px;
-    pointer-events: auto;
-}
-
-.bits-row {
+.control-group {
+  background: #111;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid #333;
   display: flex;
-  gap: 15px;
-  pointer-events: auto;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.5);
 }
-
-.stack-container {
-    display: flex;
-    flex-direction: row;
-    gap: 30px;
-    pointer-events: auto;
-    align-items: flex-start;
-    z-index: 10;
-}
-
-.full-adder-container {
-    transition: margin 0.3s;
-}
-
-.output-bit-wrapper {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 5px;
-}
-
-.bit-label {
-    font-size: 10px;
-    color: #888;
-}
-
-.result-value {
-    position: fixed;
-    bottom: 20px;
-    right: 20px;
-    background: rgba(0,0,0,0.8);
-    padding: 20px;
-    border: 2px solid #4f4;
-    border-radius: 8px;
-    font-size: 32px;
-    font-weight: bold;
-    color: #4f4;
-    box-shadow: 0 0 20px rgba(0,255,0,0.2);
-    z-index: 100;
-}
-
-/* Ensure chips are clickable */
-.chip-box {
-    pointer-events: auto;
-    z-index: 30;
-}
-.chip-input {
-    pointer-events: auto;
-    cursor: text;
-}
+.control-group label { font-size: 12px; color: #aaa; text-transform: uppercase; }
+.btn-restart { background: #d33; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold; }
+.btn-zoom { font-weight: bold; width: 28px; height: 28px; }
