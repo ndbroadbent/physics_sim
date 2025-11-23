@@ -1,0 +1,137 @@
+:root {
+  --color-off: #333;
+  --color-low: #622;
+  --color-high: #4f4;
+  --color-unknown: #444;
+  --glow-high: 0 0 10px #4f4, 0 0 20px #4f4;
+  --glow-low: 0 0 5px #500;
+  --gate-bg: #222;
+  --gate-border: #666;
+  --wire-speed: 0.5s;
+}
+
+body {
+  background-color: #111;
+  color: #eee;
+  font-family: 'Courier New', Courier, monospace;
+}
+
+.gate {
+  width: 60px;
+  height: 40px;
+  background: var(--gate-bg);
+  border: 2px solid var(--gate-border);
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  font-size: 12px;
+  position: relative;
+  transition: all 0.2s;
+  z-index: 2;
+}
+
+.gate.interactive {
+  cursor: pointer;
+}
+.gate.interactive:hover {
+  border-color: #fff;
+  transform: scale(1.05);
+}
+
+.gate.high {
+  border-color: var(--color-high);
+  box-shadow: var(--glow-high);
+  color: var(--color-high);
+}
+
+.gate.low {
+  border-color: var(--color-low);
+  box-shadow: var(--glow-low);
+  color: #f66;
+}
+
+.gate-port {
+  width: 8px;
+  height: 8px;
+  background: #888;
+  border-radius: 50%;
+  position: absolute;
+}
+
+/* Default port positions (Left In, Right Out) */
+.gate-port.in-0 { top: 20%; left: -4px; }
+.gate-port.in-1 { bottom: 20%; left: -4px; }
+.gate-port.out { top: 50%; right: -4px; transform: translateY(-50%); }
+
+/* Specific Gate Types */
+.gate-type-NOT {
+  border-radius: 0 20px 20px 0; /* Triangle-ish */
+}
+.gate-type-AND {
+  border-radius: 0 20px 20px 0;
+}
+
+/* INPUT Gates: Output at Bottom */
+.gate-type-INPUT .gate-port.out {
+  top: auto;
+  bottom: -4px;
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+}
+
+/* OUTPUT Gates: Input at Top */
+.gate-type-OUTPUT .gate-port.in-0 {
+  top: -4px;
+  left: 50%;
+  bottom: auto;
+  transform: translateX(-50%);
+}
+
+
+/* Wires */
+.wire-path {
+  fill: none;
+  stroke: var(--color-unknown);
+  stroke-width: 2;
+  stroke-linecap: round;
+  transition: stroke var(--wire-speed) linear;
+}
+
+.wire-path.high {
+  stroke: var(--color-high);
+  filter: drop-shadow(0 0 2px #4f4);
+}
+
+.wire-path.low {
+  stroke: var(--color-low);
+}
+
+/* Groups */
+.adder-bit-row {
+  display: flex;
+  gap: 40px;
+  padding: 20px;
+  border: 1px solid #333;
+  margin: 10px;
+  position: relative;
+  background: #1a1a1a;
+}
+
+.group-box {
+  border: 1px dashed #555;
+  padding: 10px;
+  position: relative;
+}
+
+.group-label {
+  position: absolute;
+  top: -10px;
+  left: 10px;
+  background: #1a1a1a;
+  padding: 0 5px;
+  font-size: 10px;
+  color: #aaa;
+}
