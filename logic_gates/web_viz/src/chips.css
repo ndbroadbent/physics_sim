@@ -1,3 +1,8 @@
+/* No Transitions Utility */
+.no-transitions, .no-transitions * {
+    transition: none !important;
+}
+
 /* Chip / IO Box Styling */
 
 .chip-box {

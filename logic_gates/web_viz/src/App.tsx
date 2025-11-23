@@ -90,10 +90,26 @@ function App() {
   }, [valA, valB, sim]);
 
   const handleReset = () => {
+    // Disable transitions for instant reset
+    document.body.classList.add('no-transitions');
+    
     sim.reset();
-    setTimeout(() => {
-        updateInputs(valA, valB);
-    }, 100);
+    
+    // Re-enable transitions after a brief moment to allow DOM to update
+    requestAnimationFrame(() => {
+        setTimeout(() => {
+            document.body.classList.remove('no-transitions');
+            // Restart flow
+            setTimeout(() => {
+                updateInputs(valA, valB);
+            }, 50);
+        }, 50);
+    });
+  };
+
+  const handleClear = () => {
+      setValA(0);
+      setValB(0);
   };
 
   const toggleBit = (val: number, setVal: (v: number) => void, bit: number) => {
@@ -123,6 +139,7 @@ function App() {
                     value={sliderVal} 
                     onChange={e => handleSpeedChange(Number(e.target.value))} 
                  />
+                 <button className="btn-restart" onClick={handleClear} style={{ marginLeft: '10px', background: '#666' }}>CLEAR</button>
                  <button className="btn-restart" onClick={handleReset} style={{ marginLeft: '10px' }}>RESET</button>
             </div>
         </div>
