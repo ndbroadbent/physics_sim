@@ -19,7 +19,6 @@ function App() {
   const [valA, setValA] = useState(0);
   const [valB, setValB] = useState(0);
   const [delay, setDelay] = useState(50);
-  
   const [zoom, setZoom] = useState(1); // Zoom is now a multiplier, 1 = 100%
   const [baseZoom, setBaseZoom] = useState(0.72); // Start with a sensible default
   const [contentSize, setContentSize] = useState({ w: 0, h: 0 });
@@ -29,11 +28,14 @@ function App() {
   const innerCircuitRef = useRef<HTMLDivElement>(null);
 
   const staticConnections = useMemo(() => {
-    // ... (omitted for brevity, same as before)
       const conns = [];
       for (let i = 0; i < 8; i++) {
           conns.push({ from: `INPUT A-out-${i}`, to: `gate-A${i}-fake-in`, logicGateId: `A${i}` });
+      }
+      for (let i = 0; i < 8; i++) {
           conns.push({ from: `INPUT B-out-${i}`, to: `gate-B${i}-fake-in`, logicGateId: `B${i}` });
+      }
+      for (let i = 0; i < 8; i++) {
           conns.push({ from: `gate-S${i}`, to: `SUM-in-${i}`, logicGateId: `S${i}` });
       }
       conns.push({ from: `gate-${layout.coutId}`, to: `SUM-in-8`, logicGateId: layout.coutId });
@@ -117,7 +119,7 @@ function App() {
         </div>
 
         <div className="circuit-container" ref={circuitContainerRef}>
-             <div className="inner-circuit-wrapper" style={{ opacity: isReady ? 1 : 0, width: contentSize.w * baseZoom, height: contentSize.h * baseZoom}}>
+             <div className="inner-circuit-wrapper" style={{ opacity: isReady ? 1 : 0, width: contentSize.w > 0 ? contentSize.w * baseZoom : 'auto', height: contentSize.h > 0 ? contentSize.h * baseZoom : 'auto'}}>
                 <div 
                     className="inner-circuit" 
                     ref={innerCircuitRef} 
