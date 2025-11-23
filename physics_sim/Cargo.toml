@@ -39,10 +39,9 @@ path = "src/main_genetic_v3.rs"
 name = "physics_wave"
 path = "src/main_wave.rs"
 
-
 [[bin]]
-name = "physics_materials"
-path = "src/main_materials.rs"
+name = "logic_evolution"
+path = "src/main_logic_evolution.rs"
 
 [dependencies]
 bytemuck = { version = "1.24.0", features = ["derive"] }

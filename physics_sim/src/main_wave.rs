@@ -1,15 +1,17 @@
 use anyhow::Result;
 use wgpu::util::DeviceExt;
 use image::{ImageBuffer, Rgba};
+use std::fs;
 
 // Parameters
-const GRID_WIDTH: u32 = 1024; // Increased width
-const GRID_HEIGHT: u32 = 1024; // Increased height
+const GRID_WIDTH: u32 = 1280;
+const GRID_HEIGHT: u32 = 720;
 const DT: f32 = 0.1;
 const DX: f32 = 1.0;
-const DAMP: f32 = 0.9995; // Less damping
-const STEPS_PER_FRAME: u32 = 10;
-const TOTAL_FRAMES: u32 = 700;
+const DAMP: f32 = 1.0; // Lossless
+const STEPS_PER_FRAME: u32 = 5; 
+const TOTAL_FRAMES: u32 = 8000; // Increased duration for Soliton propagation
+const SAVE_INTERVAL: u32 = 1; // Save every frame
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -19,12 +21,15 @@ struct WaveParams {
     dt: f32,
     dx: f32,
     damp: f32,
-    padding: [f32; 3], // Align to 16 bytes
+    padding: [f32; 3],
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     env_logger::init();
+    
+    println!("CWD: {:?}", std::env::current_dir()?);
+    fs::create_dir_all("frames")?; 
 
     // 1. Setup GPU
     let instance = wgpu::Instance::default();
@@ -35,72 +40,62 @@ async fn main() -> Result<()> {
     let grid_size = (GRID_WIDTH * GRID_HEIGHT) as usize;
     let mut u_field = vec![0.0f32; grid_size];
     let mut u_prev = vec![0.0f32; grid_size];
-    let mut material = vec![[1.0f32, 0.0, 0.0, 0.0]; grid_size]; // n0=1.0 (Air), n2=0.0
+    let mut material = vec![[1.0f32, 0.0, 0.0, 0.0]; grid_size]; 
 
-    // --- Setup Scene: Dynamic Double Slit ---
-    let wall_x_center = GRID_WIDTH / 2;
-    let wall_width = 10;
-    let wall_x_start = wall_x_center - wall_width / 2;
-    let wall_x_end = wall_x_center + wall_width / 2;
-
-    let slit_height = 30; // 30 pixels high
-    let slit_gap = 50; // Gap between slits
-
-    let slit_y_center = GRID_HEIGHT / 2;
-    let slit1_y_start = slit_y_center - slit_gap / 2 - slit_height;
-    let slit1_y_end = slit_y_center - slit_gap / 2;
-    let slit2_y_start = slit_y_center + slit_gap / 2;
-    let slit2_y_end = slit_y_center + slit_gap / 2 + slit_height;
+    // --- Setup Scene: Full Grid Uniform Non-Linear Kerr Medium ---
+    let n0_kerr = 1.5; // Base refractive index (glass)
+    let n2_kerr = 0.0001; // Non-linear coefficient (tuned for soliton)
 
     for y in 0..GRID_HEIGHT {
         for x in 0..GRID_WIDTH {
             let idx = (y * GRID_WIDTH + x) as usize;
-
-            // Material: Wall
-            if x >= wall_x_start && x <= wall_x_end {
-                if (y >= slit1_y_start && y < slit1_y_end) || (y >= slit2_y_start && y < slit2_y_end) {
-                    // Slit (Air)
-                    material[idx] = [1.0, 0.0, 0.0, 0.0];
-                } else {
-                    // Wall (High Index / Block)
-                    material[idx] = [3.0, 0.0, 0.0, 0.0];
-                }
-            }
-
-            // Non-Linear Kerr Material Region after the slits
-            // Fixed size: 150 pixels wide, 110 pixels high
-            if x > wall_x_end + 50 && x < wall_x_end + 50 + 150 && y > (GRID_HEIGHT/2) - 55 && y < (GRID_HEIGHT/2) + 55 {
-                // n0=1.5, n2=0.5 (Strong non-linearity)
-                material[idx] = [1.5, 0.5, 0.0, 0.0];
-            }
+            material[idx] = [n0_kerr, n2_kerr, 0.0, 0.0]; // Entire grid is Kerr medium
         }
     }
+    
+    // Initial Pulse: A Gaussian Beam launched from the left
+    let beam_amplitude = 50.0; // Crucial parameter for soliton formation
+    let beam_width = 15.0; // Controls diffraction
+    let beam_start_x = GRID_WIDTH as f32 / 8.0; // Start 1/8th of the way in
 
-    // Initial Pulse (Gaussian) at Left, vertically centered
     for y in 0..GRID_HEIGHT {
         for x in 0..GRID_WIDTH {
             let idx = (y * GRID_WIDTH + x) as usize;
-            let dx = x as f32 - (GRID_WIDTH as f32 / 4.0); // 1/4 of the way in
-            let dy = y as f32 - (GRID_HEIGHT as f32 / 2.0); // Centered
-            let dist = (dx*dx + dy*dy).sqrt();
-            if dist < 20.0 {
-                u_field[idx] = (-dist * 0.1).exp() * 10.0; // High amplitude pulse
-                u_prev[idx] = u_field[idx]; // Stationary start (splits into 2 waves)
-            }
+            
+            let dx = x as f32 - beam_start_x;
+            let dy = y as f32 - (GRID_HEIGHT as f32 / 2.0); // Vertically centered
+            
+            // Gaussian profile in Y
+            let gaussian_y = (-dy*dy / (2.0 * beam_width*beam_width)).exp();
+            
+            // Gaussian profile in X (Pulse packet width)
+            let pulse_length = 40.0;
+            let gaussian_x = (-dx*dx / (2.0 * pulse_length*pulse_length)).exp();
+            
+            // Initial pulse shape (Packet)
+            u_field[idx] = beam_amplitude * gaussian_y * gaussian_x;
+            
+            // u_prev(x) = u_field(x - v*dt) => shift center of gaussian_x
+            // Center was beam_start_x. New center is beam_start_x - (c*dt).
+            // dx_prev = x - (beam_start_x - c*dt) = dx + c*dt
+            let prev_dx = dx + (1.0 * DT);
+            let gaussian_x_prev = (-prev_dx*prev_dx / (2.0 * pulse_length*pulse_length)).exp();
+            
+            u_prev[idx] = beam_amplitude * gaussian_y * gaussian_x_prev;
         }
     }
 
     // 3. Create Buffers
     let buffer_a = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Buffer A"), contents: bytemuck::cast_slice(&u_field), usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        label: Some("Buffer A"), contents: bytemuck::cast_slice(&u_field), usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
     });
     let buffer_b = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Buffer B"), contents: bytemuck::cast_slice(&u_prev), usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        label: Some("Buffer B"), contents: bytemuck::cast_slice(&u_prev), usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
     });
     let mat_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Material"), contents: bytemuck::cast_slice(&material), usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
     });
-
+    
     let params = WaveParams { width: GRID_WIDTH, height: GRID_HEIGHT, dt: DT, dx: DX, damp: DAMP, padding: [0.0; 3] };
     let param_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Params"), contents: bytemuck::cast_slice(&[params]), usage: wgpu::BufferUsages::UNIFORM,
@@ -147,14 +142,19 @@ async fn main() -> Result<()> {
 
     // 5. Run Loop
     let mut current_bind_group = 0;
-    println!("Simulating Wave Propagation...");
+    println!("Simulating Soliton Propagation ({} frames)...", TOTAL_FRAMES);
 
-    for _frame in 0..TOTAL_FRAMES {
+    let buffer_size = (grid_size * 4) as wgpu::BufferAddress;
+    let buffer_size_mat = (grid_size * 16) as wgpu::BufferAddress;
+    let staging = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: buffer_size, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+    let staging_mat = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: buffer_size_mat, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+
+    for frame in 0..TOTAL_FRAMES {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         {
             let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
             cpass.set_pipeline(&pipeline);
-
+            
             for _ in 0..STEPS_PER_FRAME {
                 if current_bind_group == 0 {
                     cpass.set_bind_group(0, &bind_group_0, &[]);
@@ -163,132 +163,86 @@ async fn main() -> Result<()> {
                     cpass.set_bind_group(0, &bind_group_1, &[]);
                     current_bind_group = 0;
                 }
-                let wgs = (GRID_WIDTH + 15) / 16;
-                cpass.dispatch_workgroups(wgs, wgs, 1);
+                let wgs_x = (GRID_WIDTH + 15) / 16;
+                let wgs_y = (GRID_HEIGHT + 15) / 16;
+                cpass.dispatch_workgroups(wgs_x, wgs_y, 1);
             }
         }
-
+        
+        if frame % SAVE_INTERVAL == 0 {
+            let source_buffer = if current_bind_group == 0 { &buffer_a } else { &buffer_b };
+            encoder.copy_buffer_to_buffer(source_buffer, 0, &staging, 0, buffer_size);
+            encoder.copy_buffer_to_buffer(&mat_buffer, 0, &staging_mat, 0, buffer_size_mat);
+        }
+        
         queue.submit(Some(encoder.finish()));
-        // Polling is implicit or we wait at the end
-    }
+        
+        if frame % SAVE_INTERVAL == 0 {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let (tx2, rx2) = tokio::sync::oneshot::channel();
 
-    // Wait for all frames
-    device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).unwrap();
+            let slice = staging.slice(..);
+            slice.map_async(wgpu::MapMode::Read, move |v| tx.send(v).unwrap());
+            
+            let slice_mat = staging_mat.slice(..);
+            slice_mat.map_async(wgpu::MapMode::Read, move |v| tx2.send(v).unwrap());
 
-    // 6. Readback Last Frame
-    let source_buffer = if current_bind_group == 0 { &buffer_a } else { &buffer_b };
-
-    let buffer_size = (grid_size * 4) as wgpu::BufferAddress; // f32
-    let buffer_size_mat = (grid_size * 16) as wgpu::BufferAddress; // vec4
-
-    let staging = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: buffer_size, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
-    let staging_mat = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: buffer_size_mat, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
-
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-    encoder.copy_buffer_to_buffer(source_buffer, 0, &staging, 0, buffer_size);
-    encoder.copy_buffer_to_buffer(&mat_buffer, 0, &staging_mat, 0, buffer_size_mat);
-    queue.submit(Some(encoder.finish()));
-
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    let (tx2, rx2) = tokio::sync::oneshot::channel();
-
-    let slice = staging.slice(..);
-    slice.map_async(wgpu::MapMode::Read, move |v| tx.send(v).unwrap());
-
-    let slice_mat = staging_mat.slice(..);
-    slice_mat.map_async(wgpu::MapMode::Read, move |v| tx2.send(v).unwrap());
-
-    device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).unwrap();
-    rx.await.unwrap().unwrap();
-    rx2.await.unwrap().unwrap();
-
-    let data = slice.get_mapped_range();
-    let floats: &[f32] = bytemuck::cast_slice(&data);
-
-    let data_mat = slice_mat.get_mapped_range();
-    let mats: &[f32] = bytemuck::cast_slice(&data_mat); // stride 4
-
-    // Save Image
-    let mut img = ImageBuffer::new(GRID_WIDTH, GRID_HEIGHT);
-    for y in 0..GRID_HEIGHT {
-        for x in 0..GRID_WIDTH {
-            let idx = (y * GRID_WIDTH + x) as usize;
-            let val = floats[idx];
-
-                        // Material Visualization
-
+            device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).unwrap();
+            rx.await.unwrap().unwrap();
+            rx2.await.unwrap().unwrap();
+            
+            {
+                let data = slice.get_mapped_range();
+                let floats: &[f32] = bytemuck::cast_slice(&data);
+                
+                let data_mat = slice_mat.get_mapped_range();
+                let mats: &[f32] = bytemuck::cast_slice(&data_mat); 
+                
+                let mut img = ImageBuffer::new(GRID_WIDTH, GRID_HEIGHT);
+                for y in 0..GRID_HEIGHT {
+                    for x in 0..GRID_WIDTH {
+                        let idx = (y * GRID_WIDTH + x) as usize;
+                        let val = floats[idx];
+                        
                         let mat_idx = idx * 4;
-
                         let n0 = mats[mat_idx];
-
-
-
-                        // Base color (Material)
-
+                        
                         let mut r = 0u8;
-
                         let mut g = 0u8;
-
                         let mut b = 0u8;
-
-
-
+                        
                         if n0 > 1.1 {
-
-                            let wall_val = if n0 > 4.0 { 100 } else { 50 }; // Light gray for wall, Dark for glass
-
-                            r = wall_val;
-
-                            g = wall_val;
-
-                            b = wall_val;
-
+                            // Draw the uniform Kerr medium background as a light gray
+                            r = 100; g = 100; b = 100;
                         }
 
-
-
-                        // Add Wave (Additive blending)
-
-                        let intensity = (val.abs() * 20.0).clamp(0.0, 1.0); // Boosted brightness
-
-
-
-                        if val < 0.0 {
-
+                        let intensity = (val.abs() * 20.0).clamp(0.0, 1.0); 
+                        if val < 0.0 { 
                             let wave_r = (intensity * 255.0) as u8;
-
                             r = r.saturating_add(wave_r);
-
-                        } else {
-
+                        } else { 
                             let wave_b = (intensity * 255.0) as u8;
-
                             b = b.saturating_add(wave_b);
-
                         }
-
-
-
-                        // Green channel for "energy" intensity or just keep material gray
-
                         if val.abs() > 0.01 {
-
                              let wave_g = (intensity * 50.0) as u8;
-
                              g = g.saturating_add(wave_g);
-
                         }
-
-
-
                         img.put_pixel(x, y, Rgba([r, g, b, 255]));
-
-
+                    }
+                }
+                let filename = format!("frames/frame_{:04}.png", frame / SAVE_INTERVAL);
+                img.save(&filename).unwrap();
+                if frame % 100 == 0 {
+                    println!("Saved {}", filename);
+                }
+            }
+            staging.unmap();
+            staging_mat.unmap();
         }
     }
-
-    img.save("wave_output.png").unwrap();
-    println!("Saved 'wave_output.png'");
-
+    
+    println!("Simulation Complete. Frames saved to 'frames/'.");
+    
     Ok(())
 }

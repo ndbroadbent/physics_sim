@@ -3,148 +3,131 @@ import subprocess
 def generate_nand_adder_dot(num_bits=8):
     lines = []
     lines.append("digraph NAND_Adder {")
-    lines.append("  newrank=true;")  # Key to allow rank=source/sink with clusters
+    # lines.append("  newrank=true;") # Removed to prevent crash
     lines.append("  rankdir=LR;")
     lines.append("  nodesep=0.5;")
-    lines.append("  ranksep=0.8;")
+    lines.append("  ranksep=1.2;") 
     lines.append("  splines=ortho;")
+    lines.append("  bgcolor=\"#000000\";")
+    lines.append("  compound=true;") # Allow edges between clusters
     
-    # Define styles
-    lines.append("  node [fontname=\"Helvetica\"];")
-    lines.append("  edge [fontname=\"Helvetica\", fontsize=10];")
+    # Dark mode styles
+    lines.append("  node [fontname=\"Helvetica\", fontcolor=\"#ffffff\"];")
+    lines.append("  edge [fontname=\"Helvetica\", fontsize=10, color=\"#ffffff\", fontcolor=\"#ffffff\"];")
     
-    # --- Inputs Grouping ---
-    lines.append("  subgraph cluster_inputs {")
-    lines.append("    label=\"Inputs\";")
-    lines.append("    style=filled; color=\"#f0f0f0\";")
-    
-    # Cluster A
-    lines.append("    subgraph cluster_A {")
-    lines.append("      label=\"Input A\";")
-    lines.append("      style=filled; color=\"#ffffff\";")
-    lines.append("      node [style=filled, fillcolor=\"#e0e0e0\", shape=circle];")
-    for i in range(num_bits):
-        lines.append(f'      A{i} [label="A{i}"];')
-    # Force vertical stacking
-    for i in range(num_bits - 1):
-        lines.append(f'      A{i} -> A{i+1} [style=invis, weight=100];')
-    lines.append("    }")
-
-    # Cluster B
-    lines.append("    subgraph cluster_B {")
-    lines.append("      label=\"Input B\";")
-    lines.append("      style=filled; color=\"#ffffff\";")
-    lines.append("      node [style=filled, fillcolor=\"#e0e0e0\", shape=circle];")
-    for i in range(num_bits):
-        lines.append(f'      B{i} [label="B{i}"];')
-    # Force vertical stacking
-    for i in range(num_bits - 1):
-        lines.append(f'      B{i} -> B{i+1} [style=invis, weight=100];')
-    lines.append("    }")
-    
-    lines.append("    Cin0 [label=\"Cin0=0\", shape=square];")
-    lines.append("  }")
-
-    # Force inputs to be at the source rank (leftmost)
-    # With newrank=true, we can do this without breaking clusters
-    lines.append("  { rank=source; Cin0; " + "; ".join([f"A{i}" for i in range(num_bits)]) + "; " + "; ".join([f"B{i}" for i in range(num_bits)]) + "; }")
-
-    # --- Outputs Grouping ---
-    lines.append("  subgraph cluster_S {")
-    lines.append("    label=\"Output Sum\";")
-    lines.append("    style=filled; color=\"#d0e0ff\";")
-    lines.append("    node [shape=doublecircle, style=filled, fillcolor=\"#c0f0c0\"];")
-    for i in range(num_bits):
-        lines.append(f'    S{i} [label="S{i}"];')
-    # Force vertical stacking
-    for i in range(num_bits - 1):
-        lines.append(f'    S{i} -> S{i+1} [style=invis, weight=100];')
-    lines.append("  }")
-
-    # Force outputs to be at the sink rank (rightmost)
-    lines.append("  { rank=sink; " + "; ".join([f"S{i}" for i in range(num_bits)]) + "; }")
-        
-    # --- NAND Nodes Logic ---
-    lines.append("  // NAND Gates")
-    lines.append("  node [shape=box, style=filled, fillcolor=\"#ffcccc\", label=\"NAND\", height=0.3, width=0.6];")
-
-    # Helper to define a NAND node
-    def nand_node(bit, name):
-        nid = f"b{bit}_{name}"
-        lines.append(f'  {nid};')
+    def create_node(nid):
+        lines.append(f'    {nid};')
         return nid
+
+    # --- CLUSTER 0: INPUTS ---
+    lines.append("  subgraph cluster_0_inputs {")
+    lines.append("    label=\"Inputs\"; fontcolor=\"#ffffff\";")
+    lines.append("    style=filled; color=\"#222222\"; bgcolor=\"#111111\";")
+    
+    # Define nodes first
+    lines.append("    Cin0 [label=\"Cin0=0\", shape=square, fontcolor=\"#ffffff\", fillcolor=\"#444444\"];")
+    
+    for i in range(num_bits):
+        lines.append(f'    A{i} [label="A{i}", style=filled, fillcolor=\"#444444\", shape=circle, fontcolor=\"#ffffff\"];')
+        lines.append(f'    B{i} [label="B{i}", style=filled, fillcolor=\"#444444\", shape=circle, fontcolor=\"#ffffff\"];')
+
+    # Vertical alignment edges for Inputs
+    lines.append("    edge [style=invis];")
+    lines.append("    Cin0 -> A0;") # Cin at top or near A0
+    for i in range(num_bits - 1):
+        lines.append(f"    A{i} -> A{i+1};")
+        lines.append(f"    B{i} -> B{i+1};")
+    lines.append("    edge [style=solid];")
+    lines.append("  }") 
+
+    # --- CLUSTER 1: ADDERS ---
+    lines.append("  subgraph cluster_1_adders {")
+    lines.append("    label=\"Full Adders Stack\"; fontcolor=\"#ffffff\";")
+    lines.append("    style=filled; color=\"#444444\"; bgcolor=\"#222222\";")
+    lines.append("    node [shape=box, style=filled, fillcolor=\"#662222\", label=\"NAND\", height=0.3, width=0.6, fontcolor=\"#ffffff\"];")
 
     prev_cout = "Cin0"
     for bit in range(num_bits):
-        # Create a cluster for each bit's adder logic to keep it somewhat organized (optional but nice)
-        lines.append(f"  subgraph cluster_bit_{bit} {{")
-        lines.append(f"    label=\"Bit {bit}\"; style=dotted; color=\"#aaaaaa\";")
+        # Nested cluster for each bit to group its logic visually
+        lines.append(f"    subgraph cluster_bit_{bit} {{")
+        lines.append(f"      label=\"Bit {bit}\"; style=rounded; color=\"#bbbbbb\"; bgcolor=\"#333322\"; fontcolor=\"#ffffff\";")
         
         A = f"A{bit}"
         B = f"B{bit}"
         Cin = prev_cout
         
-        # Half-adder 1: s1 = A XOR B, c1 = A AND B
-        ha1_n1 = nand_node(bit, "ha1_n1")  # nand(A,B)
-        lines.append(f"    {A} -> {ha1_n1};")
-        lines.append(f"    {B} -> {ha1_n1};")
+        # Logic Nodes
+        ha1_n1 = create_node(f"b{bit}_ha1_n1")
+        c1 = create_node(f"b{bit}_c1")
+        ha1_n2 = create_node(f"b{bit}_ha1_n2")
+        ha1_n3 = create_node(f"b{bit}_ha1_n3")
+        s1 = create_node(f"b{bit}_s1")
         
-        ha1_n2 = nand_node(bit, "ha1_n2")  # nand(A,ha1_n1)
-        lines.append(f"    {A} -> {ha1_n2};")
-        lines.append(f"    {ha1_n1} -> {ha1_n2};")
+        ha2_n1 = create_node(f"b{bit}_ha2_n1")
+        c2 = create_node(f"b{bit}_c2")
+        ha2_n2 = create_node(f"b{bit}_ha2_n2")
+        ha2_n3 = create_node(f"b{bit}_ha2_n3")
+        S_local = create_node(f"b{bit}_S")
         
-        ha1_n3 = nand_node(bit, "ha1_n3")  # nand(B,ha1_n1)
-        lines.append(f"    {B} -> {ha1_n3};")
-        lines.append(f"    {ha1_n1} -> {ha1_n3};")
-        
-        s1 = nand_node(bit, "s1")          # nand(ha1_n2,ha1_n3)
-        lines.append(f"    {ha1_n2} -> {s1};")
-        lines.append(f"    {ha1_n3} -> {s1};")
-        
-        c1 = nand_node(bit, "c1")          # nand(ha1_n1,ha1_n1) = A AND B
-        lines.append(f"    {ha1_n1} -> {c1};")
-        lines.append(f"    {ha1_n1} -> {c1};")
-        
-        # Half-adder 2: S = s1 XOR Cin, c2 = s1 AND Cin
-        ha2_n1 = nand_node(bit, "ha2_n1")  # nand(s1, Cin)
-        lines.append(f"    {s1} -> {ha2_n1};")
-        lines.append(f"    {Cin} -> {ha2_n1};")
-        
-        ha2_n2 = nand_node(bit, "ha2_n2")  # nand(s1, ha2_n1)
-        lines.append(f"    {s1} -> {ha2_n2};")
-        lines.append(f"    {ha2_n1} -> {ha2_n2};")
-        
-        ha2_n3 = nand_node(bit, "ha2_n3")  # nand(Cin, ha2_n1)
-        lines.append(f"    {Cin} -> {ha2_n3};")
-        lines.append(f"    {ha2_n1} -> {ha2_n3};")
-        
-        S = nand_node(bit, "S")            # final sum bit S = nand(ha2_n2,ha2_n3)
-        lines.append(f"    {ha2_n2} -> {S};")
-        lines.append(f"    {ha2_n3} -> {S};")
-        
-        # connect to external sum output
-        lines.append(f"    {S} -> S{bit};")
-        
-        c2 = nand_node(bit, "c2")          # nand(ha2_n1,ha2_n1) = s1 AND Cin
-        lines.append(f"    {ha2_n1} -> {c2};")
-        lines.append(f"    {ha2_n1} -> {c2};")
-        
-        # OR for carry out: Cout = c1 OR c2 via NANDs
-        or_n1 = nand_node(bit, "or_n1")    # nand(c1,c1) = NOT c1
-        lines.append(f"    {c1} -> {or_n1};")
-        lines.append(f"    {c1} -> {or_n1};")
-        
-        or_n2 = nand_node(bit, "or_n2")    # nand(c2,c2) = NOT c2
-        lines.append(f"    {c2} -> {or_n2};")
-        lines.append(f"    {c2} -> {or_n2};")
-        
-        Cout = nand_node(bit, "Cout")      # nand(or_n1, or_n2) = c1 OR c2
-        lines.append(f"    {or_n1} -> {Cout};")
-        lines.append(f"    {or_n2} -> {Cout};")
-        
-        lines.append("  }") # End cluster_bit_{bit}
+        or_n1 = create_node(f"b{bit}_or_n1")
+        or_n2 = create_node(f"b{bit}_or_n2")
+        Cout = create_node(f"b{bit}_Cout")
+
+        # Edges
+        # HA1
+        lines.append(f"      {A} -> {ha1_n1}; {B} -> {ha1_n1};")
+        lines.append(f"      {ha1_n1} -> {c1}; {ha1_n1} -> {c1};") 
+        lines.append(f"      {A} -> {ha1_n2}; {ha1_n1} -> {ha1_n2};")
+        lines.append(f"      {B} -> {ha1_n3}; {ha1_n1} -> {ha1_n3};")
+        lines.append(f"      {ha1_n2} -> {s1}; {ha1_n3} -> {s1};")
+
+        # HA2
+        cin_attr = " [constraint=false, color=\"#00bfff\"]" if bit > 0 else ""
+        lines.append(f"      {s1} -> {ha2_n1}; {Cin} -> {ha2_n1}{cin_attr};")
+        lines.append(f"      {ha2_n1} -> {c2}; {ha2_n1} -> {c2};")
+        lines.append(f"      {s1} -> {ha2_n2}; {ha2_n1} -> {ha2_n2};")
+        lines.append(f"      {Cin} -> {ha2_n3}{cin_attr}; {ha2_n1} -> {ha2_n3};")
+        lines.append(f"      {ha2_n2} -> {S_local}; {ha2_n3} -> {S_local};")
+
+        # OR
+        lines.append(f"      {c1} -> {or_n1}; {c1} -> {or_n1};")
+        lines.append(f"      {c2} -> {or_n2}; {c2} -> {or_n2};")
+        lines.append(f"      {or_n1} -> {Cout}; {or_n2} -> {Cout};")
+
+        lines.append("    }") # End bit cluster
 
         prev_cout = Cout
+
+    # Vertical alignment backbone for Adders
+    lines.append("    edge [style=invis];")
+    for bit in range(num_bits - 1):
+        # Link the Couts to force the blocks to stack
+        lines.append(f"    b{bit}_Cout -> b{bit+1}_Cout;")
+        # Maybe link logic too?
+        lines.append(f"    b{bit}_ha1_n1 -> b{bit+1}_ha1_n1;")
+    lines.append("    edge [style=solid];")
+
+    lines.append("  }") # End cluster_1_adders
+
+    # --- CLUSTER 2: OUTPUTS ---
+    lines.append("  subgraph cluster_2_outputs {")
+    lines.append("    label=\"Output Sum\"; fontcolor=\"#ffffff\";")
+    lines.append("    style=filled; color=\"#222266\"; bgcolor=\"#111133\";")
+    lines.append("    node [shape=doublecircle, style=filled, fillcolor=\"#226622\", fontcolor=\"#ffffff\"];")
+    
+    for i in range(num_bits):
+        lines.append(f'    S{i} [label="S{i}"];')
+        
+    # Vertical alignment for Outputs
+    lines.append("    edge [style=invis];")
+    for i in range(num_bits - 1):
+        lines.append(f"    S{i} -> S{i+1};")
+    lines.append("    edge [style=solid];")
+    lines.append("  }") # End cluster_2_outputs
+
+    # --- GLOBAL EDGES (Crossing Clusters) ---
+    for bit in range(num_bits):
+        lines.append(f"  b{bit}_S -> S{bit};")
 
     lines.append("}")
     return "\n".join(lines)
