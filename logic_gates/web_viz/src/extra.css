@@ -36,6 +36,13 @@
     color: #88f;
 }
 
+.xor-box {
+    border-color: #fa0;
+}
+.xor-box .logic-label {
+    color: #fa0;
+}
+
 .not-box {
     border-color: #f88;
 }

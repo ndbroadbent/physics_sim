@@ -75,7 +75,7 @@ function App() {
              <div className="inner-circuit" ref={containerRef}>
                  <WireOverlay containerRef={containerRef} />
 
-                 <div className="section inputs-section">
+                 <div className="section inputs-section" style={{ display: 'flex', justifyContent: 'center', gap: '40px' }}>
                      <div className="input-block">
                          <h3>A Bits (LSB -&gt; MSB)</h3>
                          <div className="bits-row">
@@ -89,6 +89,7 @@ function App() {
                             ))}
                          </div>
                      </div>
+                     
                      <div className="input-block">
                          <h3>B Bits</h3>
                          <div className="bits-row">
@@ -115,7 +116,7 @@ function App() {
 
                  <div className="section outputs-section">
                      <h3>Output Sum Bits + Overflow</h3>
-                     <div className="bits-row">
+                     <div className="bits-row" style={{ justifyContent: 'center' }}>
                          {layout.outputIds.map((id, i) => (
                              <div key={id} className="output-bit-wrapper">
                                  <Gate id={id} type="OUTPUT" />
