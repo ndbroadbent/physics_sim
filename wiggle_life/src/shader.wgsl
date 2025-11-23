@@ -6,7 +6,9 @@ struct SimParams {
     offset_y: i32,
     offset_z: i32,
     step_type: u32, 
-    frame: u32,
+    frame: u32, // Still used for temporal wobble
+    pad1: u32,
+    pad2: u32,
 };
 
 @group(0) @binding(0) var<uniform> params: SimParams;
@@ -27,6 +29,8 @@ fn get_idx(x: i32, y: i32, z: i32) -> u32 {
     return u32(wz * h * w + wy * w + wx);
 }
 
+// hash function and quantum_alpha are no longer needed, removing them.
+
 @compute @workgroup_size(4, 4, 4)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let x = i32(global_id.x);
@@ -39,56 +43,49 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let idx = get_idx(x, y, z);
     
-    // Inflationary Phase Logic
-    let is_inflation = params.frame < 500u;
-
-    // Logic Split
+    // Logic Split based on which layer we are updating
     if (params.step_type == 0u || params.step_type == 2u || params.step_type == 5u) {
         // --- Update Top Layer ---
+        
         let val_top = top_in[idx];
         
-        let sx = x + params.offset_x;
-        let sy = y + params.offset_y;
-        let sz = z + params.offset_z;
-        let val_bottom = bottom_in[get_idx(sx, sy, sz)];
+        let shifted_x = x + params.offset_x;
+        let shifted_y = y + params.offset_y;
+        let shifted_z = z + params.offset_z;
+        let val_bottom = bottom_in[get_idx(shifted_x, shifted_y, shifted_z)];
         
         var result = 0u;
         if (params.step_type == 0u) { // AND
             result = u32(val_top != 0u && val_bottom != 0u);
         } else if (params.step_type == 2u) { // NOR
             result = u32(!(val_top != 0u || val_bottom != 0u));
-        } else { // XNOR (5) / NOR (Standard)
-            if (is_inflation) {
-                result = u32((val_top != 0u) == (val_bottom != 0u));
-            } else {
-                result = u32(!(val_top != 0u || val_bottom != 0u)); // NOR
-            }
+        } else { // XNOR (5) - Always use XNOR
+            result = u32((val_top != 0u) == (val_bottom != 0u));
         }
+        
         top_out[idx] = result;
-        bottom_out[idx] = bottom_in[idx];
+        bottom_out[idx] = bottom_in[idx]; // Pass-through
 
     } else {
         // --- Update Bottom Layer ---
+        
         let val_bottom = bottom_in[idx];
         
-        let sx = x - params.offset_x;
-        let sy = y - params.offset_y;
-        let sz = z - params.offset_z;
-        let val_top = top_in[get_idx(sx, sy, sz)];
+        let shifted_x = x - params.offset_x;
+        let shifted_y = y - params.offset_y;
+        let shifted_z = z - params.offset_z;
+        let val_top = top_in[get_idx(shifted_x, shifted_y, shifted_z)];
         
         var result = 0u;
         if (params.step_type == 1u) { // OR
             result = u32(val_top != 0u || val_bottom != 0u);
         } else if (params.step_type == 3u) { // NAND
             result = u32(!(val_top != 0u && val_bottom != 0u));
-        } else { // XOR (4) / NAND (Standard)
-            if (is_inflation) {
-                result = u32((val_top != 0u) != (val_bottom != 0u));
-            } else {
-                result = u32(!(val_top != 0u && val_bottom != 0u)); // NAND
-            }
+        } else { // XOR (4) - Always use XOR
+            result = u32((val_top != 0u) != (val_bottom != 0u));
         }
+        
         bottom_out[idx] = result;
-        top_out[idx] = top_in[idx];
+        top_out[idx] = top_in[idx]; // Pass-through
     }
 }

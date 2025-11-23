@@ -21,7 +21,7 @@ async fn run() {
     env_logger::init();
 
     // Load Font
-    let font_path = "/System/Library/Fonts/Monaco.ttf"; 
+    let font_path = "/System/Library/Fonts/Monaco.ttf";
     let font_data = std::fs::read(font_path).expect("Failed to load font");
     let font = FontRef::try_from_slice(&font_data).expect("Error constructing Font");
 
@@ -54,7 +54,7 @@ async fn run() {
         let cy = DIM_Y / 2;
         let cz = DIM_Z / 2;
         let idx = (cz * DIM_Y * DIM_X + cy * DIM_X + cx) as usize;
-        
+
         top_data[idx] = 1;
         bottom_data[idx] = 0;
         println!("Initialized seeds at ({}, {}, {})", cx, cy, cz);
@@ -193,7 +193,7 @@ async fn run() {
         (0, 1, 1, 0), (0, 0, 1, 1), (1, 0, 1, 0), (1, 1, 1, 1),
     ];
 
-    let total_frames = 1000;
+    let total_frames = 5000;
     let mut top_ops = 0;
     let mut bottom_ops = 0;
 
@@ -203,18 +203,18 @@ async fn run() {
 
         // Logic Ops (Standard Model)
         let (step_type, op_name) = if axis == 0 {
-            let (op, name) = match top_ops % 3 { 
-                0 => (0, "AND"), 
-                1 => (2, "NOR"), 
-                _ => (5, "XNOR/NOR") // Inflation/Standard
+            let (op, name) = match top_ops % 3 {
+                0 => (0, "AND"),
+                1 => (2, "NOR"),
+                _ => (5, "XNOR") // Always XNOR
             };
             top_ops += 1;
             (op, name)
         } else {
-            let (op, name) = match bottom_ops % 3 { 
-                0 => (1, "OR"), 
-                1 => (3, "NAND"), 
-                _ => (4, "XOR/NAND") // Inflation/Standard
+            let (op, name) = match bottom_ops % 3 {
+                0 => (1, "OR"),
+                1 => (3, "NAND"),
+                _ => (4, "XOR") // Always XOR
             };
             bottom_ops += 1;
             (op, name)
@@ -287,10 +287,10 @@ async fn run() {
 
         // --- Orbiting Camera Raycaster ---
         let mut img = ImageBuffer::new(IMG_W, IMG_H);
-        
+
         // Camera Setup
         let center = [DIM_X as f32 / 2.0, DIM_Y as f32 / 2.0, DIM_Z as f32 / 2.0];
-        let radius = DIM_X as f32 * 1.8;
+        let radius = DIM_X as f32 * 0.9; // Zoomed in
         let angle = (frame as f32 * 0.05) * 0.5; // Rotate
         let cam_y = center[1] + radius * 0.3; // Slightly above
         let cam_x = center[0] + radius * angle.cos();
@@ -308,11 +308,11 @@ async fn run() {
             for px in 0..IMG_W {
                 let uv_x = (px as f32 / IMG_W as f32) * 2.0 - 1.0;
                 let uv_y = 1.0 - (py as f32 / IMG_H as f32) * 2.0;
-                
+
                 let ray_dir = normalize(add(fwd, add(scale(right, uv_x), scale(up, uv_y))));
-                
+
                 let (t_min, t_max) = intersect_box(cam_pos, ray_dir, [0.0, 0.0, 0.0], [DIM_X as f32, DIM_Y as f32, DIM_Z as f32]);
-                
+
                 let mut r = 0.0;
                 let mut g = 0.0;
                 let mut b = 0.0;
@@ -321,28 +321,28 @@ async fn run() {
                 if t_min < t_max && t_max > 0.0 {
                     let start_t = t_min.max(0.0);
                     let end_t = t_max;
-                    let step_size = 1.0; 
+                    let step_size = 1.0;
                     let mut t = start_t;
-                    
+
                     while t < end_t && alpha_acc < 1.0 {
                         let p = add(cam_pos, scale(ray_dir, t));
                         let ix = p[0] as u32;
                         let iy = p[1] as u32;
                         let iz = p[2] as u32;
-                        
+
                         if ix < DIM_X && iy < DIM_Y && iz < DIM_Z {
                             let idx = (iz * DIM_Y * DIM_X + iy * DIM_X + ix) as usize;
                             let val_t = top_slice[idx];
                             let val_b = bottom_slice[idx];
-                            
+
                             let (cr, cg, cb, a) = match (val_t, val_b) {
-                                (0, 1) => (0.0, 0.0, 0.0, 0.0), 
-                                (0, 0) => (0.5, 0.0, 0.5, 0.15), 
-                                (1, 1) => (1.0, 1.0, 1.0, 0.3), 
-                                (1, 0) => (0.0, 1.0, 1.0, 0.2), 
+                                (0, 1) => (0.0, 0.0, 0.0, 0.0),
+                                (0, 0) => (0.5, 0.0, 0.5, 0.15),
+                                (1, 1) => (1.0, 1.0, 1.0, 0.3),
+                                (1, 0) => (0.0, 1.0, 1.0, 0.2),
                                 _ => (0.0, 0.0, 0.0, 0.0),
                             };
-                            
+
                             if a > 0.0 {
                                 let contrib = a * (1.0 - alpha_acc);
                                 r += cr * contrib;
@@ -354,19 +354,18 @@ async fn run() {
                         t += step_size;
                     }
                 }
-                
+
                 img.put_pixel(px, py, Rgb([(r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8]));
             }
         }
-        
+
         // Draw Debug Text
-        let layer_name = if axis == 0 { "TOP (A)" } else { "BOTTOM (B)" };
-        let inflation_txt = if frame < 500 { "INFLATION" } else { "STANDARD" };
-        let debug_text = format!("T={:04} | {} | Op: {} | {}", frame, layer_name, op_name, inflation_txt);
-        
-        let scale = PxScale::from(20.0);
+                        let layer_name = if axis == 0 { "TOP" } else { "BOT" };
+                        let debug_text = format!("T={:04} | L:{: <3} | Op:{: <9}",
+                            frame, layer_name, op_name);
+                let scale = PxScale::from(20.0);
         draw_text_mut(&mut img, Rgb([255, 255, 0]), 10, 10, scale, &font, &debug_text);
-        
+
         img.save(format!("{}/frame_{:05}.png", frames_dir, frame)).unwrap();
         if frame % 50 == 0 { println!("Rendered frame {}", frame); }
     }
@@ -395,7 +394,7 @@ fn intersect_box(origin: [f32; 3], dir: [f32; 3], box_min: [f32; 3], box_max: [f
             t_min = t_min.max(t1.min(t2));
             t_max = t_max.min(t1.max(t2));
         } else if origin[i] < box_min[i] || origin[i] > box_max[i] {
-            return (1e30, -1e30); 
+            return (1e30, -1e30);
         }
     }
     (t_min, t_max)
