@@ -2,16 +2,28 @@ use std::borrow::Cow;
 use wgpu::util::DeviceExt;
 use image::{ImageBuffer, Rgb};
 use std::path::Path;
+use imageproc::drawing::draw_text_mut;
+use ab_glyph::{FontRef, PxScale};
 
 mod gpu_data;
 use gpu_data::SimParams;
 
-const WIDTH: u32 = 1024;
-const HEIGHT: u32 = 1024;
-const WORKGROUP_SIZE: u32 = 16;
+// 3D Dimensions
+const DIM_X: u32 = 128;
+const DIM_Y: u32 = 128;
+const DIM_Z: u32 = 128;
+
+// Output Image Res
+const IMG_W: u32 = 512;
+const IMG_H: u32 = 512;
 
 async fn run() {
     env_logger::init();
+
+    // Load Font
+    let font_path = "/System/Library/Fonts/Monaco.ttf"; 
+    let font_data = std::fs::read(font_path).expect("Failed to load font");
+    let font = FontRef::try_from_slice(&font_data).expect("Error constructing Font");
 
     // 1. Initialize GPU
     let instance = wgpu::Instance::default();
@@ -32,34 +44,23 @@ async fn run() {
         .unwrap();
 
     // 2. Initialize Data
-    let mut top_data = vec![0u32; (WIDTH * HEIGHT) as usize];
-    let mut bottom_data = vec![1u32; (WIDTH * HEIGHT) as usize];
+    let vol_size = (DIM_X * DIM_Y * DIM_Z) as usize;
+    let mut top_data = vec![0u32; vol_size];
+    let mut bottom_data = vec![1u32; vol_size];
 
-    // Flip one random bit in Top layer (0 -> 1)
+    // Seeds (Center)
     {
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
-        let cx = WIDTH / 2;
-        let cy = HEIGHT / 2;
-        let idx = (cy * WIDTH + cx) as usize;
+        let cx = DIM_X / 2;
+        let cy = DIM_Y / 2;
+        let cz = DIM_Z / 2;
+        let idx = (cz * DIM_Y * DIM_X + cy * DIM_X + cx) as usize;
+        
         top_data[idx] = 1;
-        println!("Initialized random bit in Top layer at ({}, {})", cx, cy);
-    }
-
-    // Flip one random bit in Bottom layer (1 -> 0)
-    {
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
-        let cx = WIDTH / 2;
-        let cy = HEIGHT / 2;
-        let idx = (cy * WIDTH + cx) as usize;
         bottom_data[idx] = 0;
-        println!("Initialized random bit in Bottom layer at ({}, {})", cx, cy);
+        println!("Initialized seeds at ({}, {}, {})", cx, cy, cz);
     }
 
-    // Create Buffers (Ping-Pong: A -> B -> A)
-    // We need 4 buffers total: Top A, Top B, Bottom A, Bottom B
-    let buffer_size = (top_data.len() * std::mem::size_of::<u32>()) as u64;
+    let buffer_size = (vol_size * std::mem::size_of::<u32>()) as u64;
 
     let top_buf_a = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Top Buffer A"),
@@ -174,11 +175,6 @@ async fn run() {
     });
 
     // 4. Simulation Loop
-    let mut offset_x = 0;
-    let mut offset_y = 0;
-
-    // We create the param buffer once and update it? Or create new one every time?
-    // Updating is better.
     let params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Params Buffer"),
         size: std::mem::size_of::<SimParams>() as u64,
@@ -186,71 +182,51 @@ async fn run() {
         mapped_at_creation: false,
     });
 
-    // Ensure frames directory exists
     let frames_dir = "frames";
     if !Path::new(frames_dir).exists() {
         std::fs::create_dir(frames_dir).unwrap();
     }
 
-    // Movement Cycle: (offset_x, offset_y, axis)
-    // axis: 0 = Top (Vertical), 1 = Bottom (Horizontal)
+    // 3D Gyroscope Cycle
     let moves = [
-        // 3x3 Clockwise Cycle (8 steps)
-        (0, 0, 0), // (0,0)
-        (1, 0, 1), // (1,0)
-        (2, 0, 0), // (2,0)
-        (2, 1, 1), // (2,1)
-        (2, 2, 0), // (2,2)
-        (1, 2, 1), // (1,2)
-        (0, 2, 0), // (0,2)
-        (0, 1, 1), // (0,1)
+        (0, 0, 0, 0), (1, 0, 0, 1), (1, 1, 0, 0), (0, 1, 0, 1),
+        (0, 1, 1, 0), (0, 0, 1, 1), (1, 0, 1, 0), (1, 1, 1, 1),
     ];
 
-    let total_frames = 5000;
+    let total_frames = 1000;
     let mut top_ops = 0;
     let mut bottom_ops = 0;
 
     for frame in 0..total_frames {
         let step = frame % 8;
-        let (ox, oy, axis) = moves[step as usize];
-        offset_x = ox;
-        offset_y = oy;
+        let (ox, oy, oz, axis) = moves[step as usize];
 
-        let step_type = if axis == 0 {
-            // Top Layer: Sequence AND, NOR, XNOR
-            let op = match top_ops % 3 {
-                0 => 0, // AND
-                1 => 2, // NOR
-                _ => 5, // XNOR
+        // Logic Ops (Standard Model)
+        let (step_type, op_name) = if axis == 0 {
+            let (op, name) = match top_ops % 3 { 
+                0 => (0, "AND"), 
+                1 => (2, "NOR"), 
+                _ => (5, "XNOR/NOR") // Inflation/Standard
             };
             top_ops += 1;
-            op
+            (op, name)
         } else {
-            // Bottom Layer: Sequence OR, NAND, XOR
-            let op = match bottom_ops % 3 {
-                0 => 1, // OR
-                1 => 3, // NAND
-                _ => 4, // XOR
+            let (op, name) = match bottom_ops % 3 { 
+                0 => (1, "OR"), 
+                1 => (3, "NAND"), 
+                _ => (4, "XOR/NAND") // Inflation/Standard
             };
             bottom_ops += 1;
-            op
+            (op, name)
         };
 
-        // Update Params
         let params = SimParams {
-            width: WIDTH,
-            height: HEIGHT,
-            offset_x,
-            offset_y,
-            step_type,
-            frame: frame as u32,
-            _padding: [0; 2],
+            width: DIM_X, height: DIM_Y, depth: DIM_Z,
+            offset_x: ox, offset_y: oy, offset_z: oz,
+            step_type, frame: frame as u32,
         };
         queue.write_buffer(&params_buffer, 0, bytemuck::bytes_of(&params));
 
-        // Determine Input/Output buffers (Ping-Pong)
-        // Even frame: A -> B
-        // Odd frame: B -> A
         let (top_in, top_out, bottom_in, bottom_out) = if frame % 2 == 0 {
             (&top_buf_a, &top_buf_b, &bottom_buf_a, &bottom_buf_b)
         } else {
@@ -271,31 +247,15 @@ async fn run() {
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         {
-            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                 label: None,
-                 timestamp_writes: None,
-            });
+            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
             cpass.set_pipeline(&pipeline);
             cpass.set_bind_group(0, &bind_group, &[]);
-            cpass.dispatch_workgroups(WIDTH / WORKGROUP_SIZE, HEIGHT / WORKGROUP_SIZE, 1);
+            cpass.dispatch_workgroups(DIM_X / 4, DIM_Y / 4, DIM_Z / 4);
         }
 
-        // Visualization: Read back data to generate image
-        // We need both Top and Bottom to sum them.
-        // Since we just computed 'out' buffers, those are the current state.
-        // However, we can only map one buffer at a time efficiently or need multiple copies.
-        // Let's copy TopOut and BottomOut to CPU.
-        // Wait, MapRead requires the buffer to be MAP_READ. Storage buffers usually aren't.
-        // We copy Storage -> Staging (Mapped).
-
-        // We need TWO staging buffers or copy sequentially.
-        // Let's copy Top -> Staging, read, then Bottom -> Staging, read.
-        // This is slow but fine for offline rendering.
-
+        // Readback
         encoder.copy_buffer_to_buffer(top_out, 0, &staging_buffer, 0, buffer_size);
         queue.submit(Some(encoder.finish()));
-
-        // Read Top
         let top_slice = {
             let buffer_slice = staging_buffer.slice(..);
             let (tx, rx) = std::sync::mpsc::channel();
@@ -303,17 +263,15 @@ async fn run() {
             device.poll(wgpu::Maintain::Wait);
             rx.recv().unwrap().unwrap();
             let data = buffer_slice.get_mapped_range();
-            let result: Vec<u32> = bytemuck::cast_slice(&data).to_vec();
+            let res: Vec<u32> = bytemuck::cast_slice(&data).to_vec();
             drop(data);
             staging_buffer.unmap();
-            result
+            res
         };
 
-        // Read Bottom
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         encoder.copy_buffer_to_buffer(bottom_out, 0, &staging_buffer, 0, buffer_size);
         queue.submit(Some(encoder.finish()));
-
         let bottom_slice = {
             let buffer_slice = staging_buffer.slice(..);
             let (tx, rx) = std::sync::mpsc::channel();
@@ -321,57 +279,126 @@ async fn run() {
             device.poll(wgpu::Maintain::Wait);
             rx.recv().unwrap().unwrap();
             let data = buffer_slice.get_mapped_range();
-            let result: Vec<u32> = bytemuck::cast_slice(&data).to_vec();
+            let res: Vec<u32> = bytemuck::cast_slice(&data).to_vec();
             drop(data);
             staging_buffer.unmap();
-            result
+            res
         };
 
-        // Generate Image
-        let mut img = ImageBuffer::new(WIDTH, HEIGHT);
-        for y in 0..HEIGHT {
-            for x in 0..WIDTH {
-                let idx = (y * WIDTH + x) as usize;
-                let t = top_slice[idx];
-                let b = bottom_slice[idx];
+        // --- Orbiting Camera Raycaster ---
+        let mut img = ImageBuffer::new(IMG_W, IMG_H);
+        
+        // Camera Setup
+        let center = [DIM_X as f32 / 2.0, DIM_Y as f32 / 2.0, DIM_Z as f32 / 2.0];
+        let radius = DIM_X as f32 * 1.8;
+        let angle = (frame as f32 * 0.05) * 0.5; // Rotate
+        let cam_y = center[1] + radius * 0.3; // Slightly above
+        let cam_x = center[0] + radius * angle.cos();
+        let cam_z = center[2] + radius * angle.sin();
+        let cam_pos = [cam_x, cam_y, cam_z];
 
-                let pixel = match (t, b) {
-                    (0, 0) => Rgb([0u8, 0u8, 0u8]),       // Black
-                    (1, 0) => Rgb([0u8, 0u8, 139u8]),     // Dark Blue (Top=1, Bottom=0)
-                    (0, 1) => Rgb([30u8, 144u8, 255u8]),  // Medium Blue (Top=0, Bottom=1)
-                    (1, 1) => Rgb([255u8, 255u8, 255u8]), // White
-                    _ => Rgb([255u8, 0u8, 0u8]),          // Error
-                };
-                img.put_pixel(x, y, pixel);
-            }
-        }
-        img.save(format!("{}/frame_{:05}.png", frames_dir, frame)).unwrap();
+        // Basis Vectors (LookAt)
+        let fwd = normalize(sub(center, cam_pos));
+        let world_up = [0.0, 1.0, 0.0];
+        let right = normalize(cross(fwd, world_up));
+        let up = cross(right, fwd);
 
-        // Log every frame now.
-        if frame % 100 == 0 || true { // Force log every frame for debugging
-            let top_count: u32 = top_slice.iter().sum();
-            let bottom_count: u32 = bottom_slice.iter().sum();
+        // Render
+        for py in 0..IMG_H {
+            for px in 0..IMG_W {
+                let uv_x = (px as f32 / IMG_W as f32) * 2.0 - 1.0;
+                let uv_y = 1.0 - (py as f32 / IMG_H as f32) * 2.0;
+                
+                let ray_dir = normalize(add(fwd, add(scale(right, uv_x), scale(up, uv_y))));
+                
+                let (t_min, t_max) = intersect_box(cam_pos, ray_dir, [0.0, 0.0, 0.0], [DIM_X as f32, DIM_Y as f32, DIM_Z as f32]);
+                
+                let mut r = 0.0;
+                let mut g = 0.0;
+                let mut b = 0.0;
+                let mut alpha_acc = 0.0;
 
-            let mut coords = String::new();
-            if top_count > 0 && top_count < 20 {
-                let mut points = Vec::new();
-                for (i, &val) in top_slice.iter().enumerate() {
-                    if val != 0 {
-                        let y = i as u32 / WIDTH;
-                        let x = i as u32 % WIDTH;
-                        points.push(format!("({}, {})", x, y));
+                if t_min < t_max && t_max > 0.0 {
+                    let start_t = t_min.max(0.0);
+                    let end_t = t_max;
+                    let step_size = 1.0; 
+                    let mut t = start_t;
+                    
+                    while t < end_t && alpha_acc < 1.0 {
+                        let p = add(cam_pos, scale(ray_dir, t));
+                        let ix = p[0] as u32;
+                        let iy = p[1] as u32;
+                        let iz = p[2] as u32;
+                        
+                        if ix < DIM_X && iy < DIM_Y && iz < DIM_Z {
+                            let idx = (iz * DIM_Y * DIM_X + iy * DIM_X + ix) as usize;
+                            let val_t = top_slice[idx];
+                            let val_b = bottom_slice[idx];
+                            
+                            let (cr, cg, cb, a) = match (val_t, val_b) {
+                                (0, 1) => (0.0, 0.0, 0.0, 0.0), 
+                                (0, 0) => (0.5, 0.0, 0.5, 0.15), 
+                                (1, 1) => (1.0, 1.0, 1.0, 0.3), 
+                                (1, 0) => (0.0, 1.0, 1.0, 0.2), 
+                                _ => (0.0, 0.0, 0.0, 0.0),
+                            };
+                            
+                            if a > 0.0 {
+                                let contrib = a * (1.0 - alpha_acc);
+                                r += cr * contrib;
+                                g += cg * contrib;
+                                b += cb * contrib;
+                                alpha_acc += contrib;
+                            }
+                        }
+                        t += step_size;
                     }
                 }
-                coords = format!(" [{}]", points.join(", "));
+                
+                img.put_pixel(px, py, Rgb([(r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8]));
             }
+        }
+        
+        // Draw Debug Text
+        let layer_name = if axis == 0 { "TOP (A)" } else { "BOTTOM (B)" };
+        let inflation_txt = if frame < 500 { "INFLATION" } else { "STANDARD" };
+        let debug_text = format!("T={:04} | {} | Op: {} | {}", frame, layer_name, op_name, inflation_txt);
+        
+        let scale = PxScale::from(20.0);
+        draw_text_mut(&mut img, Rgb([255, 255, 0]), 10, 10, scale, &font, &debug_text);
+        
+        img.save(format!("{}/frame_{:05}.png", frames_dir, frame)).unwrap();
+        if frame % 50 == 0 { println!("Rendered frame {}", frame); }
+    }
+    println!("Done!");
+}
 
-            println!("Frame {}: Top Ones = {}{}, Bottom Ones = {}", frame, top_count, coords, bottom_count);
+// Vector Math Helpers
+fn normalize(v: [f32; 3]) -> [f32; 3] {
+    let len = (v[0]*v[0] + v[1]*v[1] + v[2]*v[2]).sqrt();
+    if len == 0.0 { return [0.0, 0.0, 0.0]; }
+    [v[0]/len, v[1]/len, v[2]/len]
+}
+fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] { [a[0]-b[0], a[1]-b[1], a[2]-b[2]] }
+fn add(a: [f32; 3], b: [f32; 3]) -> [f32; 3] { [a[0]+b[0], a[1]+b[1], a[2]+b[2]] }
+fn scale(v: [f32; 3], s: f32) -> [f32; 3] { [v[0]*s, v[1]*s, v[2]*s] }
+fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[1]*b[2] - a[2]*b[1], a[2]*b[0] - a[0]*b[2], a[0]*b[1] - a[1]*b[0]]
+}
+fn intersect_box(origin: [f32; 3], dir: [f32; 3], box_min: [f32; 3], box_max: [f32; 3]) -> (f32, f32) {
+    let mut t_min: f32 = -1e30;
+    let mut t_max: f32 = 1e30;
+    for i in 0..3 {
+        if dir[i] != 0.0 {
+            let t1 = (box_min[i] - origin[i]) / dir[i];
+            let t2 = (box_max[i] - origin[i]) / dir[i];
+            t_min = t_min.max(t1.min(t2));
+            t_max = t_max.min(t1.max(t2));
+        } else if origin[i] < box_min[i] || origin[i] > box_max[i] {
+            return (1e30, -1e30); 
         }
     }
-
-    println!("Done! Run ffmpeg to generate video.");
+    (t_min, t_max)
 }
 
-fn main() {
-    pollster::block_on(run());
-}
+fn main() { pollster::block_on(run()); }
