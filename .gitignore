@@ -21,3 +21,5 @@ Cargo.lock
 *.jpeg
 *.svg
 *.mp4
+
+analysis_stats.csv
