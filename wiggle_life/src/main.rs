@@ -45,7 +45,7 @@ async fn run() {
         top_data[idx] = 1;
         println!("Initialized random bit in Top layer at ({}, {})", cx, cy);
     }
-    
+
     // Flip one random bit in Bottom layer (1 -> 0)
     {
         use rand::Rng;
@@ -56,11 +56,11 @@ async fn run() {
         bottom_data[idx] = 0;
         println!("Initialized random bit in Bottom layer at ({}, {})", cx, cy);
     }
-    
+
     // Create Buffers (Ping-Pong: A -> B -> A)
     // We need 4 buffers total: Top A, Top B, Bottom A, Bottom B
     let buffer_size = (top_data.len() * std::mem::size_of::<u32>()) as u64;
-    
+
     let top_buf_a = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Top Buffer A"),
         contents: bytemuck::cast_slice(&top_data),
@@ -72,7 +72,7 @@ async fn run() {
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
-    
+
     let bottom_buf_a = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Bottom Buffer A"),
         contents: bytemuck::cast_slice(&bottom_data),
@@ -176,7 +176,7 @@ async fn run() {
     // 4. Simulation Loop
     let mut offset_x = 0;
     let mut offset_y = 0;
-    
+
     // We create the param buffer once and update it? Or create new one every time?
     // Updating is better.
     let params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -201,11 +201,11 @@ async fn run() {
         (2, 1, 0), (2, 0, 0), // Down
         (1, 0, 1), (0, 0, 1), // Left
     ];
-    
-    let total_frames = 1000;
+
+    let total_frames = 2000;
     let mut top_ops = 0;
     let mut bottom_ops = 0;
-    
+
     for frame in 0..total_frames {
         let step = frame % 8;
         let (ox, oy, axis) = moves[step as usize];
@@ -231,7 +231,7 @@ async fn run() {
             bottom_ops += 1;
             op
         };
-        
+
         // Update Params
         let params = SimParams {
             width: WIDTH,
@@ -243,7 +243,7 @@ async fn run() {
             _padding: [0; 2],
         };
         queue.write_buffer(&params_buffer, 0, bytemuck::bytes_of(&params));
-        
+
         // Determine Input/Output buffers (Ping-Pong)
         // Even frame: A -> B
         // Odd frame: B -> A
@@ -269,7 +269,7 @@ async fn run() {
         {
             let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                  label: None,
-                 timestamp_writes: None, 
+                 timestamp_writes: None,
             });
             cpass.set_pipeline(&pipeline);
             cpass.set_bind_group(0, &bind_group, &[]);
@@ -280,17 +280,17 @@ async fn run() {
         // We need both Top and Bottom to sum them.
         // Since we just computed 'out' buffers, those are the current state.
         // However, we can only map one buffer at a time efficiently or need multiple copies.
-        // Let's copy TopOut and BottomOut to CPU. 
+        // Let's copy TopOut and BottomOut to CPU.
         // Wait, MapRead requires the buffer to be MAP_READ. Storage buffers usually aren't.
         // We copy Storage -> Staging (Mapped).
-        
+
         // We need TWO staging buffers or copy sequentially.
         // Let's copy Top -> Staging, read, then Bottom -> Staging, read.
         // This is slow but fine for offline rendering.
-        
+
         encoder.copy_buffer_to_buffer(top_out, 0, &staging_buffer, 0, buffer_size);
         queue.submit(Some(encoder.finish()));
-        
+
         // Read Top
         let top_slice = {
             let buffer_slice = staging_buffer.slice(..);
@@ -309,7 +309,7 @@ async fn run() {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         encoder.copy_buffer_to_buffer(bottom_out, 0, &staging_buffer, 0, buffer_size);
         queue.submit(Some(encoder.finish()));
-        
+
         let bottom_slice = {
             let buffer_slice = staging_buffer.slice(..);
             let (tx, rx) = std::sync::mpsc::channel();
@@ -330,7 +330,7 @@ async fn run() {
                 let idx = (y * WIDTH + x) as usize;
                 let t = top_slice[idx];
                 let b = bottom_slice[idx];
-                
+
                 let pixel = match (t, b) {
                     (0, 0) => Rgb([0u8, 0u8, 0u8]),       // Black
                     (1, 0) => Rgb([0u8, 0u8, 139u8]),     // Dark Blue (Top=1, Bottom=0)
@@ -342,12 +342,12 @@ async fn run() {
             }
         }
         img.save(format!("{}/frame_{:05}.png", frames_dir, frame)).unwrap();
-        
+
         // Log every frame now.
         if frame % 100 == 0 || true { // Force log every frame for debugging
             let top_count: u32 = top_slice.iter().sum();
             let bottom_count: u32 = bottom_slice.iter().sum();
-            
+
             let mut coords = String::new();
             if top_count > 0 && top_count < 20 {
                 let mut points = Vec::new();
@@ -360,11 +360,11 @@ async fn run() {
                 }
                 coords = format!(" [{}]", points.join(", "));
             }
-            
+
             println!("Frame {}: Top Ones = {}{}, Bottom Ones = {}", frame, top_count, coords, bottom_count);
         }
     }
-    
+
     println!("Done! Run ffmpeg to generate video.");
 }
 

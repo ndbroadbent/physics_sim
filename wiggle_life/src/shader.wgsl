@@ -43,23 +43,23 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let idx = get_idx(x, y);
 
-    let is_inflation = params.frame < 500u;
-    let quantum_alpha = 0.33; // 33% chance of tunneling
+    let is_inflation = params.frame < 2000u;
+    let quantum_alpha = 0.95; // chance of tunneling
     let rnd = hash(u32(x), u32(y), params.frame);
     let is_tunneling = rnd < quantum_alpha;
-    
+
     let use_xor_logic = is_inflation || is_tunneling;
-    
+
     // Logic Split based on which layer we are updating
     if (params.step_type == 0u || params.step_type == 2u || params.step_type == 5u) {
         // --- Update Top Layer ---
-        
+
         let val_top = top_in[idx];
-        
+
         let shifted_x = x + params.offset_x;
         let shifted_y = y + params.offset_y;
         let val_bottom = bottom_in[get_idx(shifted_x, shifted_y)];
-        
+
         var result = 0u;
         if (params.step_type == 0u) { // AND
             result = u32(val_top != 0u && val_bottom != 0u);
@@ -72,19 +72,19 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 result = u32(!(val_top != 0u || val_bottom != 0u)); // NOR
             }
         }
-        
+
         top_out[idx] = result;
         bottom_out[idx] = bottom_in[idx]; // Pass-through
 
     } else {
         // --- Update Bottom Layer ---
-        
+
         let val_bottom = bottom_in[idx];
-        
+
         let shifted_x = x - params.offset_x;
         let shifted_y = y - params.offset_y;
         let val_top = top_in[get_idx(shifted_x, shifted_y)];
-        
+
         var result = 0u;
         if (params.step_type == 1u) { // OR
             result = u32(val_top != 0u || val_bottom != 0u);
@@ -97,7 +97,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 result = u32(!(val_top != 0u && val_bottom != 0u)); // NAND
             }
         }
-        
+
         bottom_out[idx] = result;
         top_out[idx] = top_in[idx]; // Pass-through
     }
