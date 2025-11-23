@@ -1,4 +1,3 @@
-
 export type Bit = 0 | 1 | null;
 
 export interface Gate {
@@ -8,6 +7,7 @@ export interface Gate {
   outputs: string[]; // Wire IDs
   value: Bit;
   label?: string;
+  initialValue?: Bit; // Add initialValue to Gate interface
 }
 
 export interface Wire {
@@ -40,8 +40,8 @@ export class CircuitSimulator {
     this.state = { gates: {}, wires: {} };
   }
 
-  addGate(id: string, type: 'NAND' | 'INPUT' | 'OUTPUT', label?: string) {
-    this.state.gates[id] = { id, type, inputs: [], outputs: [], value: null, label };
+  addGate(id: string, type: 'NAND' | 'INPUT' | 'OUTPUT', label?: string, initialValue: Bit = null) {
+    this.state.gates[id] = { id, type, inputs: [], outputs: [], value: initialValue, label, initialValue };
   }
 
   addWire(sourceId: string, targetId: string, targetInputIndex: number) {
@@ -59,14 +59,28 @@ export class CircuitSimulator {
   }
 
   reset() {
+    console.log("--- RESET ---");
     Object.values(this.state.gates).forEach(g => {
-      g.value = null;
-      this.emit({ type: 'GATE_UPDATE', gateId: g.id, value: null });
+      const resetVal = g.initialValue ?? null;
+      g.value = resetVal;
+      this.emit({ type: 'GATE_UPDATE', gateId: g.id, value: resetVal });
     });
+    
     Object.values(this.state.wires).forEach(w => {
       w.value = null;
       this.emit({ type: 'WIRE_UPDATE', wireId: w.id, value: null });
     });
+    
+    // Now re-propagate any initial values
+    Object.values(this.state.gates).forEach(g => {
+        if (g.initialValue !== null && g.initialValue !== undefined) {
+             console.log(`Reset Propagating ${g.id} val=${g.initialValue}`);
+             g.outputs.forEach(wId => {
+                this.scheduleWirePropagation(wId, g.initialValue!);
+             });
+        }
+    });
+
     this.queue = [];
   }
 

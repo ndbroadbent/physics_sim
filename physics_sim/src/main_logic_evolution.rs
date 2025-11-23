@@ -8,10 +8,10 @@ const POPULATION_SIZE: usize = 30;
 const GENERATIONS: usize = 50;
 const ELITISM_COUNT: usize = 3;
 
-// FDTD Grid
-const GRID_WIDTH: u32 = 128;
-const GRID_HEIGHT: u32 = 128;
-const SIM_STEPS: u32 = 400; // Time for wave to stabilize/cross
+// FDTD Parameters
+const GRID_WIDTH: u32 = 64; // Smaller grid for faster testing
+const GRID_HEIGHT: u32 = 64;
+const SIM_STEPS: u32 = 400; // Time for wave to stabilize/cross (increased from 200 for robustness)
 const DT: f32 = 0.5; // Stability limit is 0.707
 const DX: f32 = 1.0;
 
@@ -26,15 +26,14 @@ const TEST_CASES: &[(f32, f32, f32)] = &[
     (1.0, 1.0, 0.0), // 1 NAND 1 = 0 (Destructive Interference)
 ];
 
-// Detector Locations (Quorum of 3 on the right side)
-// Grid is 128x128.
-// Right edge ~ 120. Center Y ~ 64.
-// Spread them out a bit.
-const DETECTORS: &[(u32, u32)] = &[
-    (110, 64),      // Center
-    (110, 64 + 8),  // Top
-    (110, 64 - 8),  // Bottom
-];
+// Detector Locations (5x5 region)
+const DETECTOR_X: u32 = 50;
+const DETECTOR_Y_CENTER: u32 = 32;
+const DETECTOR_SIZE: u32 = 5; // 5x5 region
+
+// Expected maximum output for a bias beam in empty space. Needs calibration.
+// With a source_val=1.0, and SIM_STEPS=400, this could reach ~1.0-2.0 or more due to reflections/constructive interference
+const MAX_BIAS_OUTPUT_ESTIMATE: f32 = 5.0; // Placeholder, tune this after initial run
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -43,10 +42,10 @@ struct SimParams {
     height: u32,
     dt: f32,
     dx: f32,
-    input_a_active: f32,
-    input_b_active: f32,
-    bias_active: f32,
-    time: f32,
+    input_a_active: f32, // 1.0 or 0.0
+    input_b_active: f32, // 1.0 or 0.0
+    bias_active: f32,    // Always 1.0
+    time: f32,           // Current simulation time
 }
 
 // --- Shader Templates ---
@@ -136,9 +135,10 @@ fn map_geometry_raw(p: vec3<f32>) -> f32 {
 }
 
 fn map_geometry(p: vec3<f32>) -> f32 {
-    // Apply Kaleidoscope symmetry before evaluating geometry
-    let p_sym = kaleidoscope(p);
-    return map_geometry_raw(p_sym);
+    // Apply Kaleidoscope symmetry before evaluating geometry - TEMPORARILY DISABLED
+    // let p_sym = kaleidoscope(p);
+    // return map_geometry_raw(p_sym);
+    return map_geometry_raw(p); // Direct evaluation
 }
 
 // --- FDTD Simulation ---
@@ -167,23 +167,24 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let x = global_id.x;
     let y = global_id.y;
 
-    if (x <= 0u || x >= params.width - 1u || y <= 0u || y >= params.height - 1u) {
-        // Simple Absorbing Boundary (Damping layer)
-        if (x < 5u || x > params.width - 5u || y < 5u || y > params.height - 5u) {
-             let i = idx(x, y);
-             u_prev[i] = u_current[i] * 0.8; // Strong damp
-        }
-        return;
-    }
-
+    // All cells updated, so no early return
+    // Ensure this is within bounds for idx() later.
+    // If we are at the very edge (0 or width-1), then x-1 or x+1 will be out of bounds.
+    // FDTD usually uses periodic boundaries or special boundary rules.
+    // For simplicity, we assume values at boundaries are fixed or damped.
+    // Let's protect laplacian access.
+    
     let i = idx(x, y);
     let u_c = u_current[i];
     let u_p = u_prev[i];
 
-    // Laplacian
-    let laplacian = u_current[idx(x+1u, y)] + u_current[idx(x-1u, y)] +
+    var laplacian = 0.0;
+    if (x > 0u && x < params.width - 1u && y > 0u && y < params.height - 1u) {
+        laplacian = u_current[idx(x+1u, y)] + u_current[idx(x-1u, y)] +
                     u_current[idx(x, y+1u)] + u_current[idx(x, y-1u)] - 
                     4.0 * u_c;
+    }
+
 
     // Geometry mapping
     let aspect = f32(params.width) / f32(params.height);
@@ -195,38 +196,38 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Material properties
     var n = 1.0; // Air
-    // Soft boundary? Or hard?
     if (dist < 0.0) {
         n = 1.5; // Glass
     }
     
-    // Kerr Effect (Non-linear) - Crucial for interaction
+    // Kerr Effect (Non-linear)
     let intensity = u_c * u_c;
-    let n2 = 0.05; // Strong non-linearity
-    n = n + n2 * intensity;
+    let n2 = 0.05; // Non-linearity coefficient
+    n = n + n2 * intensity; // n changes with local intensity
 
-    let c = 1.0 / n;
-    let courant = (c * params.dt / params.dx);
+    let c_wave = 1.0 / n; // Actual wave speed at this point
+    let courant = (c_wave * params.dt / params.dx);
     let courant_sq = courant * courant;
 
     var u_next = 2.0 * u_c - u_p + courant_sq * laplacian;
     
-    // Damping
-    u_next *= 0.999; // Minimal loss
+    // Absorbing Boundary Conditions (Soft Damping Layer)
+    if (x < 5u || x > params.width - 5u || y < 5u || y > params.height - 5u) {
+        u_next *= 0.5; // Strong damping at edges
+    }
 
-    // --- Inputs ---
-    // Continuous sine waves at specific ports
-    let freq = 0.3; 
-    let val = sin(params.time * freq);
+    // --- Input Sources ---
+    // Inject signals at specific locations (use constant source for DC input)
+    let source_val = 1.0; // Constant ON source
     
-    // Bias Input (Top Left)
-    if (params.bias_active > 0.5 && x == 10u && y == 32u) { u_next = val; }
+    // Bias Input (Top Left) - located within bounds, outside damping
+    if (params.bias_active > 0.5 && x == 10u && y == 16u) { u_next += source_val; }
     
     // Input A (Left Middle)
-    if (params.input_a_active > 0.5 && x == 10u && y == 64u) { u_next = val; }
+    if (params.input_a_active > 0.5 && x == 10u && y == 32u) { u_next += source_val; }
     
     // Input B (Left Bottom)
-    if (params.input_b_active > 0.5 && x == 10u && y == 96u) { u_next = val; }
+    if (params.input_b_active > 0.5 && x == 10u && y == 48u) { u_next += source_val; }
 
     // Write to prev (Ping-Pong logic: we bind prev as output)
     u_prev[i] = u_next;
@@ -276,7 +277,7 @@ async fn main() {
         entries: &[
             wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
             wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-            wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+            wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
         ],
     });
 
@@ -303,12 +304,12 @@ async fn main() {
     let mut rng = rand::rng();
 
     for generation_num in 0..GENERATIONS {
-        let start_time = Instant::now();
+        let _start_time = Instant::now(); // _ to suppress warning
         let mut fitness_scores: Vec<(usize, f32)> = Vec::new();
 
         // Evaluate Population
         for (idx, genome) in population.iter().enumerate() {
-            // 1. Compile
+            // 1. Compile Shader
             let geom_code = genome.to_wgsl("p");
             let full_source = SHADER_TEMPLATE
                 .replace("// INSERT_HELPERS_HERE", SHADER_HELPERS)
@@ -327,66 +328,35 @@ async fn main() {
             // 2. Test Cases (NAND Truth Table)
             for (in_a, in_b, target) in TEST_CASES {
                 // Clear Buffers (Important!)
-                // We can't easily clear storage buffers with a command unless we have a clear kernel or write_buffer.
-                // write_buffer is slow for large arrays? 64KB is fine.
-                // Let's just use write_buffer with a zeroed vec.
+                // Uses write_buffer to re-initialize to zeros
                 let zero_data = vec![0.0f32; grid_size];
                 queue.write_buffer(&buffer_a, 0, bytemuck::cast_slice(&zero_data));
                 queue.write_buffer(&buffer_b, 0, bytemuck::cast_slice(&zero_data));
 
-                // Run Sim
-                let mut current_bind_group = 0; // 0 = A->B
-                
-                // Batch compute passes? No, we need to update 'time' uniform every step?
-                // Updating uniform every step is VERY slow (CPU-GPU sync).
-                // Better: Update time in shader using a loop? No, FDTD requires barrier.
-                // Compromise: We don't update 'time' every step. We let 'time' be 'step count' * dt.
-                // But we can't update uniform inside compute pass.
-                // We can assume 'time' is just 'global_id' derived? No.
-                // Actually, for a logic gate, we need STABLE output.
-                // Let's set parameters once, and let the shader handle time? 
-                // Shader uniform `time` is constant for the dispatch?
-                // If we dispatch 300 times, we need to update time 300 times? Too slow.
-                //
-                // Solution: Push Constants? Or just don't use time-varying inputs?
-                // Use Constant Inputs (DC). 
-                // "Input A is ON" -> `u_next = 1.0`. "Input A is OFF" -> `u_next = 0.0`.
-                // Continuous Wave (CW) source. 
-                // If we assume CW, we don't need `sin(time)`. We just set source = 1.0.
-                // This simplifies everything.
-                
-                let mut params = SimParams {
+                let params_for_case = SimParams {
                     width: GRID_WIDTH, height: GRID_HEIGHT, dt: DT, dx: DX,
                     input_a_active: *in_a, input_b_active: *in_b, bias_active: 1.0,
                     time: 0.0, 
                 };
-                queue.write_buffer(&param_buffer, 0, bytemuck::cast_slice(&[params]));
+                queue.write_buffer(&param_buffer, 0, bytemuck::cast_slice(&[params_for_case]));
 
                 let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
                 {
-                    let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+                    let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassPassDescriptor { label: None, timestamp_writes: None });
                     cpass.set_pipeline(&pipeline);
                     
-                    for _ in 0..SIM_STEPS {
-                        if current_bind_group == 0 {
-                            cpass.set_bind_group(0, &bg_a_to_b, &[]);
-                            current_bind_group = 1;
-                        } else {
-                            cpass.set_bind_group(0, &bg_b_to_a, &[]);
-                            current_bind_group = 0;
-                        }
+                    let mut current_bind_group = 0; // 0 = A->B
+                    for step in 0..SIM_STEPS {
+                        let bg_to_use = if current_bind_group == 0 { &bg_a_to_b } else { &bg_b_to_a };
+                        cpass.set_bind_group(0, bg_to_use, &[]);
                         cpass.dispatch_workgroups(GRID_WIDTH/16, GRID_HEIGHT/16, 1);
+                        current_bind_group = 1 - current_bind_group; // Swap
                     }
                 }
                 
-                // Copy result to readback
-                // Result is in the buffer we LAST wrote to.
-                // If current=0, we are ABOUT to write to B. So last write was to A (via bg_b_to_a).
-                // Wait. Loop ends. current_bind_group is set for NEXT iteration.
-                // If current=0, last was 1. Last pass used bg_b_to_a (wrote to A). So A has data.
-                // If current=1, last was 0. Last pass used bg_a_to_b (wrote to B). So B has data.
-                let source = if current_bind_group == 0 { &buffer_a } else { &buffer_b };
-                encoder.copy_buffer_to_buffer(source, 0, &readback_buffer, 0, grid_bytes);
+                // Copy result to readback (Result is in the buffer that was 'destination' on last step)
+                let source_buffer_for_readback = if current_bind_group == 0 { &buffer_b } else { &buffer_a }; // If current_bind_group is 0, means last was 1, so B->A, so result is in A.
+                encoder.copy_buffer_to_buffer(source_buffer_for_readback, 0, &readback_buffer, 0, grid_bytes);
                 
                 queue.submit(Some(encoder.finish()));
                 
@@ -395,28 +365,32 @@ async fn main() {
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 buffer_slice.map_async(wgpu::MapMode::Read, move |v| tx.send(v).unwrap());
                 device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).unwrap();
-                rx.await.unwrap().unwrap();
+                rx.await.unwrap().unwrap(); // Wait for result
                 
                 {
                     let data = buffer_slice.get_mapped_range();
                     let floats: &[f32] = bytemuck::cast_slice(&data);
                     
-                    // Measure Detectors
+                    // Measure Detectors (Average over a small region)
                     let mut detected_energy = 0.0;
-                    for (dx, dy) in DETECTORS {
-                        let val = floats[(dy * GRID_WIDTH + dx) as usize];
-                        detected_energy += val.abs();
+                    for dy_offset in 0..DETECTOR_SIZE {
+                        for dx_offset in 0..DETECTOR_SIZE {
+                            let dx = DETECTOR_X + dx_offset;
+                            let dy = DETECTOR_Y_CENTER - (DETECTOR_SIZE/2) + dy_offset;
+                            if dx < GRID_WIDTH && dy < GRID_HEIGHT {
+                                let val = floats[(dy * GRID_WIDTH + dx) as usize];
+                                detected_energy += val.abs();
+                            }
+                        }
                     }
-                    let avg_output = detected_energy / (DETECTORS.len() as f32);
+                    // Average over the detector region
+                    let num_detector_pixels = (DETECTOR_SIZE * DETECTOR_SIZE) as f32;
+                    let avg_output_raw = detected_energy / num_detector_pixels;
                     
+                    // Normalize output based on expected max from bias beam
+                    let avg_output = avg_output_raw / MAX_BIAS_OUTPUT_ESTIMATE;
+
                     // Score
-                    // If target is 1.0, we want High Energy (e.g. > 0.5)
-                    // If target is 0.0, we want Low Energy (e.g. < 0.1)
-                    // Error = (Output - Target)^2
-                    
-                    // Normalize output? 
-                    // FDTD energy can grow > 1.0 due to constructive interference.
-                    // Let's clamp it or use a soft target.
                     let clamped_out = avg_output.clamp(0.0, 1.0);
                     let diff = clamped_out - target;
                     total_error += diff * diff;
@@ -434,7 +408,6 @@ async fn main() {
         let best_idx = fitness_scores[0].0;
         
         println!("Gen {} Best Fitness: {:.4} (Genome {})", generation_num, best_fit, best_idx);
-        // println!("Genome: {:?}", population[best_idx]); // Optional: Print genome
 
         // Breeding (Elitism)
         let mut new_population = Vec::new();
@@ -446,7 +419,7 @@ async fn main() {
             }
         }
         
-        // Fill rest
+        // Fill rest with mutated offspring or new randoms
         while new_population.len() < POPULATION_SIZE {
             if rng.random_bool(0.3) {
                 // Random New

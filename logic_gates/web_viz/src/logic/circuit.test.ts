@@ -22,9 +22,6 @@ describe('CircuitSimulator and Adder Logic', () => {
     sim.reset();
     vi.runAllTimers(); // Clear reset events
 
-    // Critical Fix: Set Cin0 to 0, just like in App.tsx
-    sim.setInput('Cin0', 0);
-
     for (let i = 0; i < 8; i++) {
       sim.setInput(`A${i}`, ((valA >> i) & 1) as Bit);
       sim.setInput(`B${i}`, ((valB >> i) & 1) as Bit);
@@ -65,8 +62,15 @@ describe('CircuitSimulator and Adder Logic', () => {
     expect(getCarryOut()).toBe(1); 
   });
 
-  it('should correctly add 0 + 0 = 0', () => {
-    setAndPropagate(0, 0); 
+  it('should evaluate ALL wires for 0 + 0', () => {
+    setAndPropagate(0, 0);
+    
+    const unevaluatedWires = Object.values(sim.state.wires).filter(w => w.value === null);
+    
+    if (unevaluatedWires.length > 0) {
+        console.error("Unevaluated Wires:", unevaluatedWires.map(w => w.id));
+    }
+    expect(unevaluatedWires.length).toBe(0);
     expect(getOutputSum()).toBe(0);
     expect(getCarryOut()).toBe(0);
   });

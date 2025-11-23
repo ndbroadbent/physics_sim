@@ -21,8 +21,9 @@ export function buildAdder(sim: CircuitSimulator, numBits: number = 8): AdderLay
   const inputIdsB: string[] = [];
   
   // Cin0 is a constant 0 input
-  sim.addGate('Cin0', 'INPUT', 'Cin');
-  sim.setInput('Cin0', 0);
+  // Pass 0 as initialValue so it survives resets
+  sim.addGate('Cin0', 'INPUT', 'Cin', 0);
+  // sim.setInput('Cin0', 0); // No longer needed manually
 
   for (let i = 0; i < numBits; i++) {
     const idA = `A${i}`;

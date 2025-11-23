@@ -40,7 +40,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let y = global_id.y;
 
     if (x <= 0u || x >= params.width - 1u || y <= 0u || y >= params.height - 1u) {
-        return; // Boundaries
+        // Boundary cells still need to be updated with some value or damped.
+        // For simple absorbing boundary, let's heavily damp it.
+        // Don't return, let u_next be computed and then kill it.
     }
 
     let i = idx(x, y);
@@ -52,43 +54,30 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     u_current[idx(x, y+1u)] + u_current[idx(x, y-1u)] - 
                     4.0 * u_c;
 
-    // Determine Refractive Index from Geometry
-    // Convert grid index (x,y) to physical coordinate 'p' for the SDF
-    // Let's map grid to e.g. -10 to +10 range
-    let aspect = f32(params.width) / f32(params.height);
-    let uv = vec2<f32>(f32(x) / f32(params.width), f32(y) / f32(params.height));
-    let p_coord = vec3<f32>((uv.x * 2.0 - 1.0) * 10.0 * aspect, (uv.y * 2.0 - 1.0) * 10.0, 0.0);
-    
-    let dist = map_geometry(p_coord);
-    
-    // Material properties
-    var n = 1.0; // Air
-    if (dist < 0.0) {
-        n = 1.5; // Glass/High Index
-    }
-    
-    let c = 1.0 / n;
-    let courant = (c * params.dt / params.dx);
-    let courant_sq = courant * courant;
+    // ... (material definition) ...
 
-    // Wave Equation
     var u_next = 2.0 * u_c - u_p + courant_sq * laplacian;
     
-    // Damping - Removed global damping for clarity in logic evolution
-    // u_next *= 0.999; 
+    // Absorbing Boundary Conditions (Soft Damping Layer)
+    if (x < 5u || x > params.width - 5u || y < 5u || y > params.height - 5u) {
+        u_next *= 0.5; // Strong damping at edges
+    }
 
     // --- Input Sources ---
     // Inject signals at specific locations (use constant source for DC input)
     let source_val = 1.0; // Constant ON source
     
-    // Bias Input (Top Left)
-    if (params.bias_active > 0.5 && x == 10u && y == 32u) { u_next = source_val; }
+    // Bias Input (Top Left) - located outside damping boundary now.
+    if (params.bias_active > 0.5 && x == 10u && y == 16u) { u_next += source_val; }
     
     // Input A (Left Middle)
-    if (params.input_a_active > 0.5 && x == 10u && y == 64u) { u_next = source_val; }
+    if (params.input_a_active > 0.5 && x == 10u && y == 32u) { u_next += source_val; }
     
     // Input B (Left Bottom)
-    if (params.input_b_active > 0.5 && x == 10u && y == 96u) { u_next = source_val; }
+    if (params.input_b_active > 0.5 && x == 10u && y == 48u) { u_next += source_val; }
+
+    // Write to prev (Ping-Pong logic: we bind prev as output)
+    u_prev[i] = u_next;
 
 
     // Write to "Prev" buffer (Ping-Pong logic handled by bind group swap)

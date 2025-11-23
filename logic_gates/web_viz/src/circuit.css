@@ -104,6 +104,17 @@ body {
   transform: translateX(-50%);
 }
 
+/* INPUT Gates: Fake Input at Top (Visual Target) */
+.gate-port.fake-in {
+  top: -4px;
+  left: 50%;
+  bottom: auto;
+  right: auto;
+  transform: translateX(-50%);
+  background: #555; /* Always greyish/static */
+  box-shadow: none !important;
+}
+
 /* OUTPUT Gates: Input at Top */
 .gate-type-OUTPUT .gate-port.in-0 {
   top: -4px;
