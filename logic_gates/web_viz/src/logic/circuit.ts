@@ -74,7 +74,11 @@ export class CircuitSimulator {
     const gate = this.state.gates[gateId];
     if (!gate) return;
     
-    if (gate.value !== value) {
+    // console.log(`SetInput: ${gateId} = ${value}`);
+
+    // ALWAYS propagate inputs, even if unchanged, to ensure downstream logic (like 0+0) gets triggered.
+    // In a real circuit, 0 is a driven voltage.
+    if (true) { 
       gate.value = value;
       this.emit({ type: 'GATE_UPDATE', gateId, value });
       // Propagate to outputs
@@ -85,22 +89,16 @@ export class CircuitSimulator {
   }
 
   private scheduleWirePropagation(wireId: string, value: Bit) {
-    // In a real event loop, we'd use setTimeout, but here we might want to control it manually
-    // or just use setTimeout for the visual effect.
-    // To keep it simple and synchronized with the UI, we will use setTimeout.
-    
-    // UI Effect first: "Wire starts filling" - handled by WIRE_UPDATE with null->value transition?
-    // Actually, if we want to visualize travel, we need 2 states: "Start travel" and "Arrive".
-    // For now, let's just say WIRE_UPDATE means "Source has pushed value into wire".
-    // The UI will animate this. The actual *logical* arrival happens after delay.
-    
+    const wire = this.state.wires[wireId];
+    if (wire) {
+        wire.value = value;
+    }
     this.emit({ type: 'WIRE_UPDATE', wireId, value });
     
     setTimeout(() => {
       const wire = this.state.wires[wireId];
       if (!wire) return;
       
-      // Arrival
       const targetGate = this.state.gates[wire.targetId];
       if (targetGate) {
         this.processGate(targetGate.id);
@@ -111,12 +109,15 @@ export class CircuitSimulator {
   private processGate(gateId: string) {
     const gate = this.state.gates[gateId];
     if (!gate) return;
-    if (gate.type === 'INPUT') return; // Inputs are set manually
+    // console.log(`Processing Gate: ${gateId} type=${gate.type}`);
+
+    if (gate.type === 'INPUT') return; 
     if (gate.type === 'OUTPUT') {
        // Just takes input 0
        const inputWireId = gate.inputs[0];
        const inputWire = this.state.wires[inputWireId];
        const newVal = inputWire ? inputWire.value : null;
+       // console.log(`Output Gate ${gateId} input=${newVal}`);
        if (gate.value !== newVal) {
          gate.value = newVal;
          this.emit({ type: 'GATE_UPDATE', gateId, value: newVal });
@@ -125,17 +126,23 @@ export class CircuitSimulator {
     }
 
     // NAND Logic
-    // If any input is null, output is null (conceptually, or maybe 1? No, usually logic is undefined)
-    // Let's say null propagates null.
     const val1 = this.getInputValue(gate, 0);
     const val2 = this.getInputValue(gate, 1);
 
     let newValue: Bit = null;
-    if (val1 !== null && val2 !== null) {
-      // NAND: 0,0->1; 0,1->1; 1,0->1; 1,1->0
-      newValue = (val1 === 1 && val2 === 1) ? 0 : 1;
-    } else {
-      newValue = null;
+    
+    // NAND Short-circuit logic:
+    // If ANY input is 0, output is 1.
+    if (val1 === 0 || val2 === 0) {
+        newValue = 1;
+    } 
+    // If BOTH inputs are 1, output is 0.
+    else if (val1 === 1 && val2 === 1) {
+        newValue = 0;
+    } 
+    // Otherwise (e.g. 1 & null, or null & null), we don't know yet.
+    else {
+        newValue = null;
     }
 
     if (gate.value !== newValue) {

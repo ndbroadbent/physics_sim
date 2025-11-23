@@ -27,6 +27,9 @@ function App() {
 
   // Sync inputs
   const updateInputs = (a: number, b: number) => {
+    // Ensure Cin is driven low (0)
+    sim.setInput('Cin0', 0);
+
     for (let i = 0; i < 8; i++) {
       const bitA = (a >> i) & 1;
       const bitB = (b >> i) & 1;

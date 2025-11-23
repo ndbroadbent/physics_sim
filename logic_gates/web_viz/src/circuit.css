@@ -41,15 +41,37 @@ body {
 }
 
 .gate.high {
-  border-color: var(--color-high);
-  box-shadow: var(--glow-high);
-  color: var(--color-high);
+  /* border-color: var(--color-high); Remove border glow */
+  /* box-shadow: var(--glow-high); Remove box shadow glow */
+  /* color: var(--color-high);  Keep text color? Maybe subtle. */
+  border-color: var(--gate-border); /* Reset to default */
+}
+
+/* Specific override for INPUT gates: Green Outline + Text */
+.gate.high.gate-type-INPUT {
+    border-color: var(--color-high);
+    color: var(--color-high);
+}
+
+/* Specific override for OUTPUT gates: Green Outline + Text */
+.gate.high.gate-type-OUTPUT {
+    border-color: var(--color-high);
+    color: var(--color-high);
 }
 
 .gate.low {
-  border-color: var(--color-low);
-  box-shadow: var(--glow-low);
-  color: #f66;
+  border-color: var(--gate-border);
+}
+
+/* Light up the ports instead */
+.gate.high .gate-port {
+    background: var(--color-high);
+    box-shadow: 0 0 5px var(--color-high);
+}
+
+.gate.low .gate-port {
+    background: #f66; /* Low color */
+    box-shadow: 0 0 2px #500;
 }
 
 .gate-port {

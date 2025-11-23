@@ -68,25 +68,58 @@ fn sdSphere(p: vec3<f32>, s: f32) -> f32 {
     return length(p) - s;
 }
 
+// Standard SDF Ops
+fn opUnion(d1: f32, d2: f32) -> f32 { return min(d1, d2); }
+fn opSubtract(d1: f32, d2: f32) -> f32 { return max(d1, -d2); }
+fn opIntersect(d1: f32, d2: f32) -> f32 { return max(d1, d2); }
+
+fn opSmoothUnion(d1: f32, d2: f32, k: f32) -> f32 {
+    let h = clamp( 0.5 + 0.5*(d2-d1)/k, 0.0, 1.0 );
+    return mix( d2, d1, h ) - k*h*(1.0-h);
+}
+fn opSmoothSubtract(d1: f32, d2: f32, k: f32) -> f32 {
+    let h = clamp( 0.5 - 0.5*(d2+d1)/k, 0.0, 1.0 );
+    return mix( d2, -d1, h ) + k*h*(1.0-h);
+}
+fn opSmoothIntersect(d1: f32, d2: f32, k: f32) -> f32 {
+    let h = clamp( 0.5 - 0.5*(d2-d1)/k, 0.0, 1.0 );
+    return mix( d2, d1, h ) + k*h*(1.0-h);
+}
+
+// Transform Ops (for SdfOp::Transform)
+fn opTwist(p: vec3<f32>, k: f32) -> vec3<f32> {
+    let c = cos(k*p.y);
+    let s = sin(k*p.y);
+    let m = mat2x2<f32>(c, -s, s, c);
+    return vec3<f32>(m * p.xz, p.y);
+}
+
+fn opFold(p: vec3<f32>, k: vec3<f32>) -> vec3<f32> {
+    return abs(p) - k;
+}
+
+// Repeat (for SdfOp::Repeat)
+fn opRep(p: vec3<f32>, c: f32) -> vec3<f32> {
+    return (p % c) - (c * 0.5);
+}
+
+
 // Kaleidoscope: 6-fold symmetry around Z-axis (Screen Center)
 fn kaleidoscope(p: vec3<f32>) -> vec3<f32> {
-    let segments = 6.0;
-    let angle_step = 6.28318 / segments;
+    let segments = 6.0; // 6-fold symmetry
+    let angle_step = 6.2831853 / segments; // 2*PI / segments
     
     let r = length(p.xy);
     let a = atan2(p.y, p.x);
     
-    // Fold the angle to a single sector
-    // This creates mirror symmetry within the sector
-    let a_local = a % angle_step;
-    let a_folded = abs(a_local - (angle_step * 0.5));
+    // Fold the angle into the first sector (0 to angle_step)
+    let a_folded = (a % angle_step + angle_step) % angle_step; // Ensure positive modulo
     
-    // Reconstruct p in the sector (preserving r, using folded angle)
-    // We add the half-angle back to center it?
-    // Let's just rotate it to the first sector.
-    let a_new = a_folded + (angle_step * 0.5); 
+    // Mirror within the sector
+    let a_mirror = abs(a_folded - angle_step * 0.5); 
     
-    return vec3<f32>(r * cos(a_new), r * sin(a_new), p.z);
+    // Reconstruct p in the folded sector
+    return vec3<f32>(r * cos(a_mirror), r * sin(a_mirror), p.z);
 }
 "#;
 
@@ -211,7 +244,12 @@ async fn main() {
     let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor::default()).await.unwrap();
 
     // 2. Population Init
-    let mut population: Vec<SdfOp> = (0..POPULATION_SIZE).map(|_| SdfOp::random(5)).collect();
+    let mut population: Vec<SdfOp> = Vec::with_capacity(POPULATION_SIZE);
+    // Seed with an "empty" geometry (always air) to ensure light can pass
+    population.push(SdfOp::Scalar(1.0)); // Always returns 1.0, so dist > 0 -> n=1.0 (air)
+    for _ in 1..POPULATION_SIZE {
+        population.push(SdfOp::random(5));
+    }
     
     // Shared Buffers (re-used for every individual to save VRAM)
     let grid_size = (GRID_WIDTH * GRID_HEIGHT) as usize;

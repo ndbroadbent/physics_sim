@@ -6,8 +6,10 @@
 // The Rust code will inject the SdfOp::to_wgsl() function here as 'map_geometry'.
 // It returns distance. d < 0 = Material (High Index), d > 0 = Air (Low Index).
 fn map_geometry(p: vec3<f32>) -> f32 {
-// INSERT_GENERATED_CODE_HERE
-    return 1.0; // Default empty
+    // Apply Kaleidoscope symmetry before evaluating geometry - DISABLED FOR DEBUGGING
+    // let p_sym = kaleidoscope(p);
+    // return map_geometry_raw(p_sym);
+    return map_geometry_raw(p);
 }
 
 // --- FDTD Simulation ---
@@ -72,30 +74,22 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Wave Equation
     var u_next = 2.0 * u_c - u_p + courant_sq * laplacian;
     
-    // Damping (Absorbing boundaries approx)
-    if (x < 10u || x > params.width - 10u || y < 10u || y > params.height - 10u) {
-        u_next *= 0.9;
-    } else {
-        u_next *= 0.999; // Slight global loss
-    }
+    // Damping - Removed global damping for clarity in logic evolution
+    // u_next *= 0.999; 
 
     // --- Input Sources ---
-    // Inject signals at specific locations
-    let freq = 0.5; // Source frequency
-    let source_val = sin(params.time * freq);
+    // Inject signals at specific locations (use constant source for DC input)
+    let source_val = 1.0; // Constant ON source
     
-    // Bias Input (Top-Left)
-    if (params.bias_active > 0.5 && x == 20u && y == params.height / 4u) {
-        u_next = source_val; 
-    }
-    // Input A (Center-Left)
-    if (params.input_a_active > 0.5 && x == 20u && y == params.height / 2u) {
-        u_next = source_val;
-    }
-    // Input B (Bottom-Left)
-    if (params.input_b_active > 0.5 && x == 20u && y == (params.height * 3u) / 4u) {
-        u_next = source_val;
-    }
+    // Bias Input (Top Left)
+    if (params.bias_active > 0.5 && x == 10u && y == 32u) { u_next = source_val; }
+    
+    // Input A (Left Middle)
+    if (params.input_a_active > 0.5 && x == 10u && y == 64u) { u_next = source_val; }
+    
+    // Input B (Left Bottom)
+    if (params.input_b_active > 0.5 && x == 10u && y == 96u) { u_next = source_val; }
+
 
     // Write to "Prev" buffer (Ping-Pong logic handled by bind group swap)
     u_prev[i] = u_next;
