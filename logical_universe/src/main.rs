@@ -40,7 +40,7 @@ async fn run() {
             "-preset", "fast", // Fast encoding for real-time feel
             "-crf", "18", // High quality
             "-pix_fmt", "yuv420p",
-            "wiggle_life.mkv" // MKV container for robustness
+            "logical_universe.mkv" // MKV container for robustness
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::null()) // Quiet stdout
