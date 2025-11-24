@@ -4,6 +4,8 @@ use image::{ImageBuffer, Rgb};
 use std::path::Path;
 use imageproc::drawing::draw_text_mut;
 use ab_glyph::{FontRef, PxScale};
+use std::process::{Command, Stdio};
+use std::io::Write;
 
 mod gpu_data;
 use gpu_data::SimParams;
@@ -14,8 +16,8 @@ const DIM_Y: u32 = 128;
 const DIM_Z: u32 = 128;
 
 // Output Image Res
-const IMG_W: u32 = 512;
-const IMG_H: u32 = 512;
+const IMG_W: u32 = 256;
+const IMG_H: u32 = 256;
 
 async fn run() {
     env_logger::init();
@@ -24,6 +26,29 @@ async fn run() {
     let font_path = "/System/Library/Fonts/Monaco.ttf";
     let font_data = std::fs::read(font_path).expect("Failed to load font");
     let font = FontRef::try_from_slice(&font_data).expect("Error constructing Font");
+
+    // Initialize FFMPEG Process
+    let mut ffmpeg = Command::new("ffmpeg")
+        .args(&[
+            "-y", // Overwrite output
+            "-f", "rawvideo",
+            "-pixel_format", "rgb24",
+            "-video_size", &format!("{}x{}", IMG_W, IMG_H),
+            "-framerate", "30",
+            "-i", "-", // Input from stdin
+            "-c:v", "libx264",
+            "-preset", "fast", // Fast encoding for real-time feel
+            "-crf", "18", // High quality
+            "-pix_fmt", "yuv420p",
+            "wiggle_life.mkv" // MKV container for robustness
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null()) // Quiet stdout
+        .stderr(Stdio::inherit()) // Show stderr for progress/errors
+        .spawn()
+        .expect("Failed to start ffmpeg");
+
+    let mut ffmpeg_in = ffmpeg.stdin.take().expect("Failed to open ffmpeg stdin");
 
     // 1. Initialize GPU
     let instance = wgpu::Instance::default();
@@ -56,6 +81,7 @@ async fn run() {
         let idx = (cz * DIM_Y * DIM_X + cy * DIM_X + cx) as usize;
 
         top_data[idx] = 1;
+        // Bottom layer remains all 1s (stable vacuum)
         println!("Initialized seed in Top layer at ({}, {}, {})", cx, cy, cz);
     }
 
@@ -191,38 +217,34 @@ async fn run() {
         mapped_at_creation: false,
     });
 
-    let frames_dir = "frames";
-    if !Path::new(frames_dir).exists() {
-        std::fs::create_dir(frames_dir).unwrap();
-    }
-
-    let total_frames = 1000;
+    let total_frames = 10000;
     let mut top_ops = 0;
     let mut bottom_ops = 0;
 
     for frame in 0..total_frames {
         // Xorshift Chaotic Wiggle
-        let mut state = (frame as u32).wrapping_add(123456789); // Seed
+        let mut state = (frame as u32).wrapping_add(123456789);
         state ^= state << 13;
         state ^= state >> 17;
         state ^= state << 5;
-        
+
         let ox = (state % 3) as i32 - 1; // -1, 0, 1
         let oy = ((state >> 2) % 3) as i32 - 1;
         let oz = ((state >> 4) % 3) as i32 - 1;
         let axis = (state >> 6) % 2; // 0 or 1
+
         // Logic Ops (Standard Model)
         let (step_type, op_name) = if axis == 0 {
             let (op, name) = match top_ops % 2 {
-                0 => (5, "XNOR"), // Stable & Preserves Seed
-                _ => (2, "NOR")   // Stable & Carves
+                0 => (5, "XNOR"), // Sustains Seed
+                _ => (2, "NOR")   // Carves
             };
             top_ops += 1;
             (op, name)
         } else {
             let (op, name) = match bottom_ops % 2 {
-                0 => (4, "XOR"),  // Stable & Preserves Seed
-                _ => (3, "NAND")  // Stable & Carves
+                0 => (4, "XOR"),  // Sustains Seed
+                _ => (3, "NAND")  // Carves
             };
             bottom_ops += 1;
             (op, name)
@@ -374,7 +396,8 @@ async fn run() {
         let scale = PxScale::from(20.0);
         draw_text_mut(&mut img, Rgb([255, 255, 0]), 10, 10, scale, &font, &debug_text);
 
-        img.save(format!("{}/frame_{:05}.png", frames_dir, frame)).unwrap();
+        // Write frame to FFMPEG
+        ffmpeg_in.write_all(&img).unwrap();
 
         if frame % 10 == 0 {
             let top_ones: u32 = top_slice.iter().sum();
