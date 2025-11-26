@@ -23,6 +23,8 @@ Cargo.lock
 *.mp4
 *.mkv
 
+*.log
+
 analysis_stats.csv
 
 logical_universe/frames/
