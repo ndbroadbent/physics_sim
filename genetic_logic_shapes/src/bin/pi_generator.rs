@@ -6,12 +6,12 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use rand::Rng;
 
-const PI_DIGITS: [u8; 7] = [3, 1, 4, 1, 5, 9, 2]; // 3.141592
+const PI_DIGITS: [u8; 7] = [1, 4, 1, 5, 9, 2, 6]; 
 const NUM_DP_INPUT_BITS: usize = 3; // For 7 indices (0-6), we need 3 bits
 const NUM_OUTPUT_BITS: usize = 8; // To represent a digit 0-9
 
-const NUM_NODES: usize = 300; // Increased nodes for more complex function
-const POPULATION_SIZE: usize = 1000; // Increased population
+const NUM_NODES: usize = 2000; // Increased nodes for more complex function
+const POPULATION_SIZE: usize = 5000; // Increased population
 
 fn main() {
     let mut rng = ChaCha8Rng::seed_from_u64(12345); // Fixed seed for reproducibility
@@ -51,7 +51,7 @@ fn main() {
         } else {
             stagnant_gens += 1;
             // Kick: If stuck for too long, Hard Reset
-            if stagnant_gens > 60 {
+            if stagnant_gens > 200 {
                 println!("Kick! Hard Reset. Stuck at fitness {}", evaluate(&parent));
                 parent = Genome::new_random(NUM_DP_INPUT_BITS, NUM_NODES, NUM_OUTPUT_BITS, &mut rng);
                 stagnant_gens = 0;
@@ -80,16 +80,37 @@ fn main() {
     }
 }
 
-// Evaluates a genome against all PI_DIGITS and returns total Hamming error
+// Evaluates a genome against all PI_DIGITS
+// Returns a fitness Score where LOWER IS BETTER.
+// Strategy: Weighted Sequential.
+// We want to maximize the prefix length of correct digits.
+// Error = (Total Digits - Correct Prefix Length) * 1000 + (Hamming Error of the first incorrect digit)
+// This ensures that if we have 5 correct digits, we are strictly better than 4 correct digits.
 fn evaluate(genome: &Genome) -> u32 {
-    let mut total_hamming_error = 0;
+    let mut correct_prefix = 0;
+    let mut first_error_hamming = 0;
+    let mut found_mismatch = false;
+    
     for i in 0..PI_DIGITS.len() {
         let dp_input_bools = u8_to_bool_array(i as u8, NUM_DP_INPUT_BITS);
         let outputs = genome.eval(&dp_input_bools);
         let val = bools_to_u8(&outputs);
-        total_hamming_error += (val ^ PI_DIGITS[i]).count_ones();
+        
+        if !found_mismatch {
+            if val == PI_DIGITS[i] {
+                correct_prefix += 1;
+            } else {
+                found_mismatch = true;
+                first_error_hamming = (val ^ PI_DIGITS[i]).count_ones();
+            }
+        }
     }
-    total_hamming_error
+    
+    let max_prefix = PI_DIGITS.len() as u32;
+    let prefix_score = (max_prefix - correct_prefix) * 100; // 100 penalty per missing digit in prefix
+    
+    // Add Hamming error of the specific digit we are stuck on to guide local search
+    prefix_score + first_error_hamming
 }
 
 // Helper to get all outputs for logging
