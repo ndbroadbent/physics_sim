@@ -1,11 +1,11 @@
 mod gate;
 mod inputs;
 mod targets;
+mod gpu_eval;
 
 use gate::Genome;
 use inputs::{PrecomputedInputs, IMAGE_WIDTH, IMAGE_HEIGHT, NUM_CHUNKS, COORD_BITS};
 use targets::Target;
-use rayon::prelude::*;
 use std::process::{Command, Stdio, ChildStdin};
 use std::io::Write;
 use std::fs;
@@ -16,22 +16,26 @@ use clap::Parser;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use rand::Rng;
+use gpu_eval::GpuEvaluator;
 
 // CGP Parameters
 const NUM_INPUTS: usize = COORD_BITS * 2 + 1;
 const NUM_NODES: usize = 600;
 const NUM_EPOCHS: usize = 10000; 
-const EPOCH_GENS: usize = 50;   
-const POPULATION_SIZE: usize = 64; 
-const FRONTIER_SIZE: usize = 20; // Keep more potential branches
-const MAX_STAGNATION: usize = 15; // Kill a branch if it doesn't improve for 15 epochs
+const POPULATION_SIZE: usize = 4096; 
+const FRONTIER_SIZE: usize = 64;     
+const MAX_STAGNATION: usize = 20;    
 
 #[derive(Clone)]
 struct Individual {
     genome: Genome,
-    fitness: u64,
+    fitness: (u64, u64), // (Error, ActiveNodes)
     last_improved_epoch: usize,
-    id: u64, // Just for tracking lineage/debugging
+}
+
+struct CandidateMetadata {
+    parent_fitness: (u64, u64),
+    parent_last_improved_epoch: usize,
 }
 
 #[derive(Parser, Debug)]
@@ -44,27 +48,32 @@ struct Args {
     /// Enable video generation (ffmpeg required)
     #[arg(long, default_value_t = false)]
     video: bool,
+
+    /// Save individual image frames when accuracy improves
+    #[arg(long, default_value_t = false)]
+    save_images: bool,
 }
 
 fn main() {
     let args = Args::parse();
-
-    // Deterministic RNG Setup
     let seed = args.seed.unwrap_or_else(|| rand::thread_rng().gen());
-    println!("Initializing Genetic Logic Shapes (Staleness Pruning)...");
+    println!("Initializing Genetic Logic Shapes (GPU Accelerated + Parsimony)...");
     println!("Seed: {}", seed);
     
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
 
-    // 1. Setup Data
     let inputs = PrecomputedInputs::new();
     let target_square = Target::square(80.0);
-    
     fs::create_dir_all("evolution_output").unwrap();
 
     let font_path = "/System/Library/Fonts/Monaco.ttf";
     let font_data = fs::read(font_path).expect("Failed to load font");
     let font = Font::try_from_bytes(&font_data).expect("Error constructing Font");
+
+    // GPU Setup
+    println!("Setting up GPU...");
+    let mut evaluator = pollster::block_on(GpuEvaluator::new(&inputs, &target_square));
+    println!("GPU Ready.");
 
     let mut ffmpeg_stdin: Option<ChildStdin> = if args.video {
         let mut ffmpeg = Command::new("ffmpeg")
@@ -84,154 +93,179 @@ fn main() {
     };
 
     // Initialize Frontier
-    let mut frontier: Vec<Individual> = (0..FRONTIER_SIZE)
-        .map(|i| {
-            let g = Genome::new_random(NUM_INPUTS, NUM_NODES, &mut rng);
-            let fit = evaluate_genome(&g, &inputs, &target_square);
-            Individual {
-                genome: g,
-                fitness: fit,
-                last_improved_epoch: 0,
-                id: i as u64,
-            }
-        })
+    let mut population: Vec<Genome> = (0..FRONTIER_SIZE)
+        .map(|_| Genome::new_random(NUM_INPUTS, NUM_NODES, &mut rng))
         .collect();
     
-    // Track Global Best separately for logging/video (even if it gets pruned from frontier)
+    let fitness_errors = evaluator.evaluate_batch(&population);
+    
+    let mut frontier: Vec<Individual> = population.into_iter().zip(fitness_errors).map(|(g, err)| {
+        let active = g.active_node_count() as u64;
+        Individual { genome: g, fitness: (err, active), last_improved_epoch: 0 }
+    }).collect();
+
+    frontier.sort_by(|a, b| a.fitness.cmp(&b.fitness));
+    
     let mut best_ever_individual = frontier[0].clone();
     let mut last_saved_accuracy = 0.0;
-    let mut next_id = FRONTIER_SIZE as u64;
+    let mut epochs_since_global_improvement = 0;
 
     for epoch in 0..NUM_EPOCHS {
-        // 1. Expand
-        let tasks_per_parent = (POPULATION_SIZE / frontier.len()).max(1);
-        
-        // Create tasks
-        let mut tasks = Vec::new();
-        for parent in &frontier {
-            for _ in 0..tasks_per_parent {
-                let seed: u64 = rng.gen();
-                // Variable mutation rates
-                let mutation_rate = if rng.gen_bool(0.3) { 0.01 } else { 0.002 };
-                tasks.push((parent.clone(), seed, mutation_rate, epoch));
+        // Asteroid Check
+        if epochs_since_global_improvement > 30 {
+            println!("☄️  ASTEROID IMPACT! Global stagnation detected. Total annihilation and reseed. ☄️");
+            
+            frontier.clear();
+            
+            // Fill the entire frontier with brand new random genomes
+            while frontier.len() < FRONTIER_SIZE {
+                let g = Genome::new_random(NUM_INPUTS, NUM_NODES, &mut rng);
+                frontier.push(Individual { genome: g, fitness: (u64::MAX, u64::MAX), last_improved_epoch: epoch });
             }
-        }
-
-        // Parallel Burst
-        let new_candidates: Vec<Individual> = tasks.into_par_iter()
-            .map(|(start_ind, seed, mut_rate, current_epoch)| {
-                run_evolution_burst(start_ind, seed, mut_rate, EPOCH_GENS, current_epoch, &inputs, &target_square)
-            })
-            .collect();
-
-        // 2. Merge
-        frontier.extend(new_candidates);
-
-        // 3. Prune Stagnant Branches (The Grim Reaper)
-        let before_count = frontier.len();
-        frontier.retain(|ind| (epoch - ind.last_improved_epoch) <= MAX_STAGNATION);
-        let pruned_count = before_count - frontier.len();
-
-        // 4. Sort and Deduplicate
-        frontier.sort_by(|a, b| a.fitness.cmp(&b.fitness));
-        frontier.dedup_by(|a, b| a.fitness == b.fitness); // Simple dedup by fitness
-        frontier.truncate(FRONTIER_SIZE);
-
-        // 5. Refill if empty or low (Diversity Injection)
-        while frontier.len() < FRONTIER_SIZE {
-            let g = Genome::new_random(NUM_INPUTS, NUM_NODES, &mut rng);
-            let fit = evaluate_genome(&g, &inputs, &target_square);
-            frontier.push(Individual {
-                genome: g,
-                fitness: fit,
-                last_improved_epoch: epoch, // Fresh start
-                id: next_id,
-            });
-            next_id += 1;
-        }
-        
-        // Re-sort after refill
-        frontier.sort_by(|a, b| a.fitness.cmp(&b.fitness));
-
-        // Update Global Best (for history)
-        if frontier[0].fitness < best_ever_individual.fitness {
+            
+            epochs_since_global_improvement = 0;
+            last_saved_accuracy = 0.0; // Reset image saving ratchet
+            
+            // Reset Global Best to the new random reality
+            frontier.sort_by(|a, b| a.fitness.cmp(&b.fitness));
             best_ever_individual = frontier[0].clone();
         }
 
-        let current_accuracy = 1.0 - (frontier[0].fitness as f64 / inputs::TOTAL_PIXELS as f64);
+        // 1. Expand
+        let children_per_parent = POPULATION_SIZE / frontier.len();
+        
+        let mut next_gen_genomes = Vec::with_capacity(POPULATION_SIZE);
+        let mut next_gen_metadata = Vec::with_capacity(POPULATION_SIZE);
+
+        // Keep elites
+        for p in &frontier {
+            next_gen_genomes.push(p.genome.clone());
+            next_gen_metadata.push(CandidateMetadata {
+                parent_fitness: p.fitness,
+                parent_last_improved_epoch: p.last_improved_epoch,
+            });
+        }
+
+        for parent in &frontier {
+            let stagnation = epoch - parent.last_improved_epoch;
+            
+            for _ in 0..children_per_parent {
+                let mut child = parent.genome.clone();
+                
+                let roll = rng.gen::<f64>();
+                let rate = if stagnation < 3 {
+                    if roll < 0.6 { 0.001 } else if roll < 0.9 { 0.005 } else { 0.02 }
+                } else if stagnation < 7 {
+                    if roll < 0.3 { 0.001 } else if roll < 0.7 { 0.005 } else { 0.02 }
+                } else if stagnation < 12 {
+                    if roll < 0.2 { 0.005 } else if roll < 0.6 { 0.02 } else { 0.05 }
+                } else {
+                    if roll < 0.3 { 0.02 } else if roll < 0.7 { 0.05 } else { 0.25 }
+                };
+                
+                child.mutate(rate, &mut rng);
+                next_gen_genomes.push(child);
+                next_gen_metadata.push(CandidateMetadata {
+                    parent_fitness: parent.fitness,
+                    parent_last_improved_epoch: parent.last_improved_epoch,
+                });
+            }
+        }
+
+        // 2. GPU Eval
+        let fitness_errors = evaluator.evaluate_batch(&next_gen_genomes);
+
+        // 3. Process Results (Correctly Inherit Staleness)
+        let mut candidates: Vec<Individual> = next_gen_genomes.into_iter()
+            .zip(fitness_errors)
+            .zip(next_gen_metadata)
+            .map(|((g, err), meta)| {
+                let active = g.active_node_count() as u64;
+                let fit = (err, active);
+                let last_improved = if fit < meta.parent_fitness {
+                    epoch // Improved!
+                } else {
+                    meta.parent_last_improved_epoch // Inherit staleness
+                };
+                Individual { genome: g, fitness: fit, last_improved_epoch: last_improved }
+            }).collect();
+
+        // 4. Prune Stagnant Branches
+        let before_count = candidates.len();
+        candidates.retain(|ind| (epoch - ind.last_improved_epoch) <= MAX_STAGNATION);
+        let pruned_count = before_count - candidates.len();
+
+        // 5. Sort & Truncate
+        candidates.sort_by(|a, b| a.fitness.cmp(&b.fitness));
+        candidates.dedup_by(|a, b| a.fitness == b.fitness);
+        candidates.truncate(FRONTIER_SIZE);
+        
+        frontier = candidates;
+
+        // 6. Refill if low
+        while frontier.len() < FRONTIER_SIZE {
+             let g = Genome::new_random(NUM_INPUTS, NUM_NODES, &mut rng);
+             frontier.push(Individual { genome: g, fitness: (u64::MAX, u64::MAX), last_improved_epoch: epoch });
+        }
+        frontier.sort_by(|a, b| a.fitness.cmp(&b.fitness));
+
+        // Update Global Best
+        if frontier[0].fitness < best_ever_individual.fitness {
+            // Only reset asteroid timer if ERROR improved (ignore node count optimization)
+            if frontier[0].fitness.0 < best_ever_individual.fitness.0 {
+                epochs_since_global_improvement = 0;
+            } else {
+                epochs_since_global_improvement += 1;
+            }
+            best_ever_individual = frontier[0].clone();
+        } else {
+            epochs_since_global_improvement += 1;
+        }
+
+        // Break if perfect solution found (0 errors)
+        if best_ever_individual.fitness.0 == 0 {
+            // If errors are 0, we might still want to optimize active nodes.
+            // But let's say 0 errors is "mission accomplished" for now.
+            // Or we can keep running to shrink the circuit.
+            // Let's just log it prominently.
+            if epoch % 10 == 0 { println!("Perfect solution (0 errors) found! Optimizing structure..."); }
+        }
+
+        let current_accuracy = 1.0 - (frontier[0].fitness.0 as f64 / inputs::TOTAL_PIXELS as f64);
         
         if epoch % 1 == 0 {
-             println!("Epoch {:04} | Fitness: {:8} | Acc: {:.2}% | Stale: {:2} | Pruned: {:2} | Active: {}", 
+             println!("Epoch {:04} | Fitness: {:8} | Nodes: {:3} | Acc: {:.2}% | Stale: {:2} | Pruned: {:4}", 
                 epoch, 
-                frontier[0].fitness, 
+                frontier[0].fitness.0, 
+                frontier[0].fitness.1,
                 current_accuracy * 100.0, 
                 epoch - frontier[0].last_improved_epoch,
-                pruned_count,
-                frontier[0].genome.active_node_count());
+                pruned_count);
         }
 
-        // Save Image on Improvement (using Global Best to see history, or Frontier Best to see current search?)
-        // User probably wants to see the best thing found so far.
-        let best_acc = 1.0 - (best_ever_individual.fitness as f64 / inputs::TOTAL_PIXELS as f64);
-        if (best_acc - last_saved_accuracy).abs() > 0.0001 {
-            let acc_str = (best_acc * 10000.0).round() as u32;
-            let filename = format!("evolution_output/gen_{:05}_acc_{:04}.png", epoch * EPOCH_GENS, acc_str);
-            save_diff_image(&best_ever_individual.genome, &inputs, u64::MAX, &target_square, &filename);
-            last_saved_accuracy = best_acc;
-            println!("Saved improvement: {}", filename);
+        // Save Image on Improvement
+        if args.save_images {
+            let best_acc = 1.0 - (best_ever_individual.fitness.0 as f64 / inputs::TOTAL_PIXELS as f64);
+            
+            let threshold = if best_acc < 0.90 { 0.05 } else { 0.01 };
+            
+            if best_acc > last_saved_accuracy + threshold {
+                let acc_str = (best_acc * 10000.0).round() as u32;
+                let filename = format!("evolution_output/gen_{:05}_acc_{:04}.png", epoch, acc_str);
+                save_diff_image(&best_ever_individual.genome, &inputs, u64::MAX, &target_square, &filename);
+                last_saved_accuracy = best_acc;
+                println!("Saved improvement: {}", filename);
+            }
         }
 
-        // Video Output - Show the CURRENT frontier best, even if it's worse than global best, 
-        // so we can see the "search" happening.
+        // Video Output
         if let Some(ref mut stdin) = ffmpeg_stdin {
              if epoch % 1 == 0 {
-                // We render the Frontier[0] to show what the algo is currently working on
-                let frame = render_frame(&frontier[0].genome, &inputs, &target_square, epoch * EPOCH_GENS, frontier[0].fitness, &font);
+                let frame = render_frame(&frontier[0].genome, &inputs, &target_square, epoch, frontier[0].fitness.0, &font);
                 stdin.write_all(&frame).unwrap();
              }
         }
     }
-}
-
-fn evaluate_genome(genome: &Genome, inputs: &PrecomputedInputs, target: &Target) -> u64 {
-    let mut buffer = Vec::with_capacity(NUM_NODES + NUM_INPUTS);
-    let mut total_errors = 0;
-    for i in 0..NUM_CHUNKS {
-        let mut input_vec = Vec::with_capacity(NUM_INPUTS);
-        input_vec.extend_from_slice(&inputs.x_bits[i]);
-        input_vec.extend_from_slice(&inputs.y_bits[i]);
-        input_vec.push(u64::MAX); 
-
-        let output = genome.eval(&input_vec, &mut buffer);
-        let expected = target.expected_output[i];
-        total_errors += (output ^ expected).count_ones() as u64;
-    }
-    total_errors
-}
-
-fn run_evolution_burst(mut parent: Individual, seed: u64, mutation_rate: f64, gens: usize, current_epoch: usize, inputs: &PrecomputedInputs, target: &Target) -> Individual {
-    let mut rng = ChaCha8Rng::seed_from_u64(seed);
-    
-    for _ in 0..gens {
-        let mut child_genome = parent.genome.clone();
-        child_genome.mutate(mutation_rate, &mut rng);
-        let child_fit = evaluate_genome(&child_genome, inputs, target);
-        
-        if child_fit < parent.fitness {
-            // Improvement!
-            parent.genome = child_genome;
-            parent.fitness = child_fit;
-            parent.last_improved_epoch = current_epoch; // Reset staleness
-        } 
-        // If equal or worse, we ignore it in this simple burst model, 
-        // OR we could allow neutral drift. 
-        // Let's allow neutral drift but NOT update the timestamp.
-        else if child_fit == parent.fitness {
-             parent.genome = child_genome;
-             // Do NOT update last_improved_epoch
-        }
-    }
-    parent
 }
 
 fn render_frame(genome: &Genome, inputs: &PrecomputedInputs, target: &Target, gen: usize, fit: u64, font: &Font) -> Vec<u8> {
@@ -275,22 +309,6 @@ fn render_frame(genome: &Genome, inputs: &PrecomputedInputs, target: &Target, ge
     img.into_raw()
 }
 
-fn save_ground_truth(target: &Target, filename: &str) {
-    let mut img = ImageBuffer::new(IMAGE_WIDTH, IMAGE_HEIGHT);
-    for i in 0..NUM_CHUNKS {
-        let expected_chunk = target.expected_output[i];
-        for bit in 0..inputs::CHUNK_SIZE {
-            let global_idx = i * inputs::CHUNK_SIZE + bit;
-            if global_idx >= inputs::TOTAL_PIXELS { break; }
-            let x = (global_idx as u32) % IMAGE_WIDTH;
-            let y = (global_idx as u32) / IMAGE_WIDTH;
-            let val: u8 = if (expected_chunk >> bit) & 1 == 1 { 0 } else { 255 };
-            img.put_pixel(x, y, Luma([val]));
-        }
-    }
-    img.save(filename).unwrap();
-}
-
 fn save_diff_image(genome: &Genome, inputs: &PrecomputedInputs, shape_id: u64, target: &Target, filename: &str) {
     let mut img = ImageBuffer::new(IMAGE_WIDTH, IMAGE_HEIGHT);
     let mut buffer = Vec::new();
@@ -322,6 +340,22 @@ fn save_diff_image(genome: &Genome, inputs: &PrecomputedInputs, shape_id: u64, t
                 _ => Rgb([0u8, 0u8, 0u8]), 
             };
             img.put_pixel(x, y, color);
+        }
+    }
+    img.save(filename).unwrap();
+}
+
+fn save_ground_truth(target: &Target, filename: &str) {
+    let mut img = ImageBuffer::new(IMAGE_WIDTH, IMAGE_HEIGHT);
+    for i in 0..NUM_CHUNKS {
+        let expected_chunk = target.expected_output[i];
+        for bit in 0..inputs::CHUNK_SIZE {
+            let global_idx = i * inputs::CHUNK_SIZE + bit;
+            if global_idx >= inputs::TOTAL_PIXELS { break; }
+            let x = (global_idx as u32) % IMAGE_WIDTH;
+            let y = (global_idx as u32) / IMAGE_WIDTH;
+            let val: u8 = if (expected_chunk >> bit) & 1 == 1 { 0 } else { 255 };
+            img.put_pixel(x, y, Luma([val]));
         }
     }
     img.save(filename).unwrap();
