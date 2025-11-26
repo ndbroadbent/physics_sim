@@ -159,4 +159,110 @@ impl Genome {
 
         active.iter().filter(|&&x| x).count()
     }
+
+    pub fn compact(&self) -> Self {
+        let mut active = vec![false; self.nodes.len()];
+        let mut stack = Vec::new();
+        
+        // Start from output node
+        if self.output_node_idx >= self.num_inputs {
+            let node_idx = self.output_node_idx - self.num_inputs;
+            if node_idx < self.nodes.len() {
+                stack.push(node_idx);
+                active[node_idx] = true;
+            }
+        }
+
+        while let Some(idx) = stack.pop() {
+            let node = &self.nodes[idx];
+            
+            // Check Input A
+            if node.in_a >= self.num_inputs {
+                let input_node_idx = node.in_a - self.num_inputs;
+                if input_node_idx < self.nodes.len() && !active[input_node_idx] {
+                    active[input_node_idx] = true;
+                    stack.push(input_node_idx);
+                }
+            }
+
+            // Check Input B
+            if node.in_b >= self.num_inputs {
+                let input_node_idx = node.in_b - self.num_inputs;
+                if input_node_idx < self.nodes.len() && !active[input_node_idx] {
+                    active[input_node_idx] = true;
+                    stack.push(input_node_idx);
+                }
+            }
+        }
+
+        // Create mapping from old index -> new index
+        let mut new_nodes = Vec::new();
+        let mut index_map = vec![0usize; self.nodes.len()]; // maps old_node_idx -> new_node_idx
+        
+        for (old_idx, &is_active) in active.iter().enumerate() {
+            if is_active {
+                index_map[old_idx] = new_nodes.len();
+                new_nodes.push(self.nodes[old_idx].clone());
+            }
+        }
+
+        // Remap inputs of new nodes
+        for node in &mut new_nodes {
+            if node.in_a >= self.num_inputs {
+                let old_idx = node.in_a - self.num_inputs;
+                // If the input node was active (it must be!), remap it
+                node.in_a = self.num_inputs + index_map[old_idx];
+            }
+            if node.in_b >= self.num_inputs {
+                let old_idx = node.in_b - self.num_inputs;
+                node.in_b = self.num_inputs + index_map[old_idx];
+            }
+        }
+
+        // Remap output node
+        let new_output_idx = if self.output_node_idx >= self.num_inputs {
+            let old_idx = self.output_node_idx - self.num_inputs;
+            self.num_inputs + index_map[old_idx]
+        } else {
+            self.output_node_idx
+        };
+
+        Genome {
+            num_inputs: self.num_inputs,
+            nodes: new_nodes,
+            output_node_idx: new_output_idx,
+        }
+    }
+
+    pub fn merge(&self, other: &Genome) -> Self {
+        let mut new_nodes = self.nodes.clone();
+        let offset = self.nodes.len();
+        
+        // Append other's nodes with remapped indices
+        for node in &other.nodes {
+            let mut new_node = node.clone();
+            
+            if new_node.in_a >= self.num_inputs {
+                new_node.in_a += offset;
+            }
+            if new_node.in_b >= self.num_inputs {
+                new_node.in_b += offset;
+            }
+            
+            new_nodes.push(new_node);
+        }
+        
+        // Use other's output node (remapped)
+        let new_output_idx = if other.output_node_idx >= self.num_inputs {
+            other.output_node_idx + offset
+        } else {
+            other.output_node_idx
+        };
+
+        Genome {
+            num_inputs: self.num_inputs,
+            nodes: new_nodes,
+            output_node_idx: new_output_idx,
+        }
+    }
 }

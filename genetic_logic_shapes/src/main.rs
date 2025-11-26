@@ -109,26 +109,170 @@ fn main() {
     let mut best_ever_individual = frontier[0].clone();
     let mut last_saved_accuracy = 0.0;
     let mut epochs_since_global_improvement = 0;
+    
+    let mut hall_of_fame: Vec<Genome> = Vec::new();
 
     for epoch in 0..NUM_EPOCHS {
         // Asteroid Check
         if epochs_since_global_improvement > 30 {
-            println!("☄️  ASTEROID IMPACT! Global stagnation detected. Total annihilation and reseed. ☄️");
+            println!("☄️  ASTEROID IMPACT! Global stagnation detected. Rebuilding from the Scrapyard. ☄️");
             
+            // 1. Add King to Hall of Fame (Compacted)
+            let compacted_king = best_ever_individual.genome.compact();
+            // Check if we already have it? Simple check node count/output idx?
+            // Or just push it.
+            hall_of_fame.push(compacted_king);
+            
+            println!("Hall of Fame Size: {}", hall_of_fame.len());
+
             frontier.clear();
             
-            // Fill the entire frontier with brand new random genomes
-            while frontier.len() < FRONTIER_SIZE {
+            // 2. Fill Population
+            // A. 20% Fresh Random (Exploration)
+            let random_quota = FRONTIER_SIZE / 5;
+            
+            for _ in 0..random_quota {
                 let g = Genome::new_random(NUM_INPUTS, NUM_NODES, &mut rng);
                 frontier.push(Individual { genome: g, fitness: (u64::MAX, u64::MAX), last_improved_epoch: epoch });
+            }
+            
+            // B. 80% The Genetic Blender (Scrap Yard 2.0)
+            while frontier.len() < FRONTIER_SIZE {
+                if hall_of_fame.is_empty() {
+                    let g = Genome::new_random(NUM_INPUTS, NUM_NODES, &mut rng);
+                    frontier.push(Individual { genome: g, fitness: (u64::MAX, u64::MAX), last_improved_epoch: epoch });
+                    continue;
+                }
+
+                let idx_a = rng.gen_range(0..hall_of_fame.len());
+                let idx_b = rng.gen_range(0..hall_of_fame.len());
+                
+                // Chop
+                let pieces_a = chop_genome(&hall_of_fame[idx_a], rng.gen_range(2..=4), &mut rng);
+                let pieces_b = chop_genome(&hall_of_fame[idx_b], rng.gen_range(2..=4), &mut rng);
+
+                // Mix
+                let mut soup = Vec::new();
+                soup.extend(pieces_a);
+                soup.extend(pieces_b);
+                
+                // Shuffle chunks
+                for i in (1..soup.len()).rev() {
+                    let j = rng.gen_range(0..=i);
+                    soup.swap(i, j);
+                }
+
+                // Reassemble
+                let mut new_nodes = Vec::new();
+                let total_soup_nodes: usize = soup.iter().map(|(p, _)| p.len()).sum();
+                let remaining_space = NUM_NODES.saturating_sub(total_soup_nodes);
+                let min_random = (NUM_NODES as f64 * 0.30) as usize;
+                let random_fill_target = remaining_space.max(min_random).min(NUM_NODES);
+                let nodes_per_gap = random_fill_target / (soup.len() + 1);
+
+                for (chunk, original_start_offset) in soup {
+                    // 1. Add random gap
+                    for _ in 0..nodes_per_gap {
+                        if new_nodes.len() >= NUM_NODES { break; }
+                        let limit = NUM_INPUTS + new_nodes.len();
+                        new_nodes.push(gate::Node {
+                            op: gate::Operation::random(&mut rng),
+                            in_a: rng.gen_range(0..limit),
+                            in_b: rng.gen_range(0..limit),
+                        });
+                    }
+
+                    // 2. Add Chunk
+                    let new_chunk_start = new_nodes.len();
+                    // Calculate offset difference: we are moving from 'original_start_offset' to 'new_chunk_start'
+                    // Relative positions inside the chunk are preserved if we apply this delta.
+                    
+                    // But wait, indices are absolute (NUM_INPUTS + node_idx).
+                    // If old node was at (NUM_INPUTS + 10) and pointed to (NUM_INPUTS + 5) [diff -5].
+                    // New node is at (NUM_INPUTS + 100). It should point to (NUM_INPUTS + 95).
+                    // So new_input = old_input - old_pos + new_pos.
+                    // = old_input + (new_pos - old_pos).
+                    
+                    let offset_delta = (new_chunk_start as isize) - (original_start_offset as isize);
+
+                    for (i, old_node) in chunk.iter().enumerate() {
+                        if new_nodes.len() >= NUM_NODES { break; }
+                        
+                        let mut new_node = old_node.clone();
+                        let current_abs_idx = NUM_INPUTS + new_nodes.len();
+
+                        // Fix Input A
+                        if new_node.in_a >= NUM_INPUTS {
+                            let remapped = (new_node.in_a as isize + offset_delta) as usize;
+                            // Check validity: must point to something before us
+                            if remapped < current_abs_idx && remapped >= NUM_INPUTS {
+                                new_node.in_a = remapped;
+                            } else {
+                                // Broken link (pointed outside chunk or future), rewire randomly
+                                new_node.in_a = rng.gen_range(0..current_abs_idx);
+                            }
+                        }
+                        
+                        // Fix Input B
+                        if new_node.in_b >= NUM_INPUTS {
+                            let remapped = (new_node.in_b as isize + offset_delta) as usize;
+                            if remapped < current_abs_idx && remapped >= NUM_INPUTS {
+                                new_node.in_b = remapped;
+                            } else {
+                                new_node.in_b = rng.gen_range(0..current_abs_idx);
+                            }
+                        }
+                        
+                        new_nodes.push(new_node);
+                    }
+                }
+                
+                // Fill remaining
+                while new_nodes.len() < NUM_NODES {
+                     let limit = NUM_INPUTS + new_nodes.len();
+                     new_nodes.push(gate::Node {
+                        op: gate::Operation::random(&mut rng),
+                        in_a: rng.gen_range(0..limit),
+                        in_b: rng.gen_range(0..limit),
+                     });
+                }
+                
+                let chimera = Genome {
+                    num_inputs: NUM_INPUTS,
+                    nodes: new_nodes,
+                    output_node_idx: rng.gen_range(0..NUM_INPUTS + NUM_NODES),
+                };
+                
+                frontier.push(Individual { genome: chimera, fitness: (u64::MAX, u64::MAX), last_improved_epoch: epoch });
             }
             
             epochs_since_global_improvement = 0;
             last_saved_accuracy = 0.0; // Reset image saving ratchet
             
-            // Reset Global Best to the new random reality
-            frontier.sort_by(|a, b| a.fitness.cmp(&b.fitness));
-            best_ever_individual = frontier[0].clone();
+            // Reset Global Best to new reality
+            // But first, we must evaluate the new frontier! 
+            // Or we just let the loop handle it. 
+            // But we need to reset best_ever_individual to be "worse" so we can track progress again?
+            // Or do we keep the old King as the benchmark?
+            // You said "reset the image generation ratchet... I want to see the new images from the fresh start".
+            // This implies we should visually reset.
+            // So we will set best_ever_individual to a dummy bad one, so the first eval updates it.
+            
+            // Wait, frontier has dummy fitnesses now. They will be evaluated in next step?
+            // No, step 1 is "Expand" from frontier. 
+            // If frontier has bad fitnesses, "Expand" will use them.
+            // We should probably evaluate them first?
+            // Actually, our loop structure:
+            // 1. Expand (uses frontier)
+            // 2. Eval (evals expansion)
+            // 3. Select (updates frontier with eval'd ones)
+            
+            // So if we push dummy fitnesses to frontier now, Expand will verify nothing?
+            // Expand uses `frontier` genomes to make children. It doesn't check their fitness.
+            // But `CandidateMetadata` stores `parent_fitness`. If we store MAX, any child will be "better".
+            // This is fine! The first generation will effectively be the "Eval" of these chimeras.
+            
+            best_ever_individual = frontier[0].clone(); // Which is dummy/max fitness
         }
 
         // 1. Expand
@@ -359,4 +503,41 @@ fn save_ground_truth(target: &Target, filename: &str) {
         }
     }
     img.save(filename).unwrap();
+}
+
+fn chop_genome(genome: &Genome, num_pieces: usize, rng: &mut impl Rng) -> Vec<(Vec<gate::Node>, usize)> {
+    // 1. Compact to get the functional core
+    let compacted = genome.compact();
+    let total_nodes = compacted.nodes.len();
+    
+    if total_nodes < num_pieces {
+        return vec![(compacted.nodes, 0)];
+    }
+
+    // 2. Generate split points
+    let mut cuts = Vec::new();
+    for _ in 0..num_pieces - 1 {
+        cuts.push(rng.gen_range(1..total_nodes));
+    }
+    cuts.sort();
+    cuts.dedup();
+    
+    // 3. Slice
+    let mut pieces = Vec::new();
+    let mut current_start = 0;
+    
+    for cut in cuts {
+        if cut > current_start {
+            let chunk = compacted.nodes[current_start..cut].to_vec();
+            pieces.push((chunk, current_start));
+            current_start = cut;
+        }
+    }
+    // Last piece
+    if current_start < total_nodes {
+        let chunk = compacted.nodes[current_start..].to_vec();
+        pieces.push((chunk, current_start));
+    }
+    
+    pieces
 }
