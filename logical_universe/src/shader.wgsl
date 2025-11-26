@@ -7,6 +7,10 @@ struct SimParams {
     offset_z: i32,
     step_type: u32, 
     frame: u32, 
+    wrap: u32,
+    _pad1: u32,
+    _pad2: u32,
+    _pad3: u32,
 };
 
 @group(0) @binding(0) var<uniform> params: SimParams;
@@ -15,7 +19,7 @@ struct SimParams {
 @group(0) @binding(3) var<storage, read> bottom_in: array<u32>;
 @group(0) @binding(4) var<storage, read_write> bottom_out: array<u32>;
 
-fn get_idx(x: i32, y: i32, z: i32) -> u32 {
+fn get_idx_wrapped(x: i32, y: i32, z: i32) -> u32 {
     let w = i32(params.width);
     let h = i32(params.height);
     let d = i32(params.depth);
@@ -27,7 +31,35 @@ fn get_idx(x: i32, y: i32, z: i32) -> u32 {
     return u32(wz * h * w + wy * w + wx);
 }
 
-// hash function and quantum_alpha are no longer needed, removing them.
+fn get_top_val(x: i32, y: i32, z: i32) -> u32 {
+    let w = i32(params.width);
+    let h = i32(params.height);
+    let d = i32(params.depth);
+
+    if (params.wrap == 0u) {
+        if (x < 0 || x >= w || y < 0 || y >= h || z < 0 || z >= d) {
+            return 0u; // Vacuum for Top
+        }
+        return top_in[u32(z * h * w + y * w + x)];
+    } else {
+        return top_in[get_idx_wrapped(x, y, z)];
+    }
+}
+
+fn get_bottom_val(x: i32, y: i32, z: i32) -> u32 {
+    let w = i32(params.width);
+    let h = i32(params.height);
+    let d = i32(params.depth);
+
+    if (params.wrap == 0u) {
+        if (x < 0 || x >= w || y < 0 || y >= h || z < 0 || z >= d) {
+            return 1u; // Vacuum for Bottom
+        }
+        return bottom_in[u32(z * h * w + y * w + x)];
+    } else {
+        return bottom_in[get_idx_wrapped(x, y, z)];
+    }
+}
 
 @compute @workgroup_size(4, 4, 4)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -39,7 +71,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    let idx = get_idx(x, y, z);
+    let idx = get_idx_wrapped(x, y, z); // Safe index for current cell
     
     // Logic Split based on which layer we are updating
     if (params.step_type == 0u || params.step_type == 2u || params.step_type == 5u) {
@@ -50,7 +82,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let shifted_x = x + params.offset_x;
         let shifted_y = y + params.offset_y;
         let shifted_z = z + params.offset_z;
-        let val_bottom = bottom_in[get_idx(shifted_x, shifted_y, shifted_z)];
+        
+        let val_bottom = get_bottom_val(shifted_x, shifted_y, shifted_z);
         
         var result = 0u;
         if (params.step_type == 0u) { // AND
@@ -72,7 +105,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let shifted_x = x - params.offset_x;
         let shifted_y = y - params.offset_y;
         let shifted_z = z - params.offset_z;
-        let val_top = top_in[get_idx(shifted_x, shifted_y, shifted_z)];
+        
+        let val_top = get_top_val(shifted_x, shifted_y, shifted_z);
         
         var result = 0u;
         if (params.step_type == 1u) { // OR

@@ -4,12 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bytemuck = { version = "1.24.0", features = ["derive"] }
-env_logger = "0.11.8"
-image = "0.25.9"
-imageproc = "0.24.0" # For drawing text
-log = "0.4.28"
-pollster = "0.4.0"
-rand = "0.9.2"
-ab_glyph = "0.2" # For font handling with imageproc
-wgpu = "0.20"
+wgpu = "0.19"
+env_logger = "0.10"
+pollster = "0.3"
+image = "0.24"
+bytemuck = { version = "1.4", features = ["derive"] }
+imageproc = "0.23"
+rusttype = "0.9"
+ab_glyph = "0.2"
+clap = { version = "4.0", features = ["derive"] }
