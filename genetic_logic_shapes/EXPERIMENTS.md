@@ -8,4 +8,4 @@
   - input 1 => 1
   - input 2 => 4
   - and so on.
-- Subtract one from a 4 bit number
+- Add two 4 bit numbers

@@ -63,7 +63,8 @@ fn main() {
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
 
     let inputs = PrecomputedInputs::new();
-    let target_square = Target::square(80.0);
+    let target_circle = Target::circle(80.0); // Re-introduced
+    let target_square = Target::square(80.0); // Re-introduced for ground truth saving
     fs::create_dir_all("evolution_output").unwrap();
 
     let font_path = "/System/Library/Fonts/Monaco.ttf";
@@ -72,7 +73,7 @@ fn main() {
 
     // GPU Setup
     println!("Setting up GPU...");
-    let mut evaluator = pollster::block_on(GpuEvaluator::new(&inputs, &target_square));
+    let mut evaluator = pollster::block_on(GpuEvaluator::new(&inputs, &target_circle));
     println!("GPU Ready.");
 
     let mut ffmpeg_stdin: Option<ChildStdin> = if args.video {
@@ -396,7 +397,7 @@ fn main() {
             if best_acc > last_saved_accuracy + threshold {
                 let acc_str = (best_acc * 10000.0).round() as u32;
                 let filename = format!("evolution_output/gen_{:05}_acc_{:04}.png", epoch, acc_str);
-                save_diff_image(&best_ever_individual.genome, &inputs, u64::MAX, &target_square, &filename);
+                save_diff_image(&best_ever_individual.genome, &inputs, 0u64, &target_circle, &filename); // Use target_circle and ShapeID 0
                 last_saved_accuracy = best_acc;
                 println!("Saved improvement: {}", filename);
             }
@@ -405,7 +406,7 @@ fn main() {
         // Video Output
         if let Some(ref mut stdin) = ffmpeg_stdin {
              if epoch % 1 == 0 {
-                let frame = render_frame(&frontier[0].genome, &inputs, &target_square, epoch, frontier[0].fitness.0, &font);
+                let frame = render_frame(&frontier[0].genome, &inputs, &target_circle, epoch, frontier[0].fitness.0, &font); // Use target_circle
                 stdin.write_all(&frame).unwrap();
              }
         }
