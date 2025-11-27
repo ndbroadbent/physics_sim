@@ -4,18 +4,17 @@ mod gate_universal;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use rand::Rng;
-use wgpu::Maintain;
-use std::borrow::Cow;
+use wgpu::Maintain; // Used in GpuContext::evaluate_batch
+use std::borrow::Cow; // Used in GpuContext::new for shader source
 
 const POPULATION_SIZE: usize = 10000;
-const GENOME_SIZE: usize = 16; // 4x4
+const GENOME_SIZE: usize = 64; // 8x8 Organism size
 const LEARNING_RATE: f32 = 0.05;
 
-// Constants from shader
-const SHADER_GRID_DIM: u32 = 16;
-const SHADER_GRID_SIZE: u32 = 256; // 16x16
-const SHADER_TEST_CASES: u32 = 16;
-const SHADER_TARGET_BYTES: u32 = 16;
+// Constants from shader (used for logic in main)
+const SHADER_ORG_DIM: u32 = 8;   // The 8x8 organism
+const SHADER_SIM_STEPS: u32 = 20; 
+const SHADER_TEST_CASES: u32 = 64; // Number of cells to query (0..63)
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -52,7 +51,7 @@ impl Genome {
                     0 => cell.op = rng.gen_range(0..17),
                     1 => cell.dir_a = rng.gen_range(0..8),
                     2 => cell.dir_b = rng.gen_range(0..8),
-                    _ => {} // Should not happen
+                    _ => {}
                 }
             }
         }
@@ -60,9 +59,9 @@ impl Genome {
 }
 
 struct ProbMatrix {
-    op_probs: Vec<Vec<f32>>, // [GRID_SIZE][17]
-    dir_a_probs: Vec<Vec<f32>>, // [GRID_SIZE][8]
-    dir_b_probs: Vec<Vec<f32>>, // [GRID_SIZE][8]
+    op_probs: Vec<Vec<f32>>, // [GENOME_SIZE][17]
+    dir_a_probs: Vec<Vec<f32>>, // [GENOME_SIZE][8]
+    dir_b_probs: Vec<Vec<f32>>, // [GENOME_SIZE][8]
 }
 
 impl ProbMatrix {
@@ -70,7 +69,7 @@ impl ProbMatrix {
         let op_uniform = 1.0 / 17.0;
         let dir_uniform = 1.0 / 8.0;
         ProbMatrix {
-            op_probs: vec![vec![op_uniform; 17]; GENOME_SIZE], // Use GENOME_SIZE (16)
+            op_probs: vec![vec![op_uniform; 17]; GENOME_SIZE], 
             dir_a_probs: vec![vec![dir_uniform; 8]; GENOME_SIZE],
             dir_b_probs: vec![vec![dir_uniform; 8]; GENOME_SIZE],
         }
@@ -78,7 +77,7 @@ impl ProbMatrix {
 
     fn sample(&self, rng: &mut impl Rng) -> Genome {
         let mut cells = Vec::with_capacity(GENOME_SIZE);
-        for i in 0..GENOME_SIZE { // Loop GENOME_SIZE times
+        for i in 0..GENOME_SIZE { 
             let op = sample_discrete(&self.op_probs[i], rng);
             let dir_a = sample_discrete(&self.dir_a_probs[i], rng);
             let dir_b = sample_discrete(&self.dir_b_probs[i], rng);
@@ -87,9 +86,9 @@ impl ProbMatrix {
         Genome { cells }
     }
 
-    fn update(&mut self, genome: &Genome) { // Update takes &Genome
+    fn update(&mut self, genome: &Genome) { 
         let one_minus = 1.0 - LEARNING_RATE;
-        for (i, cell) in genome.cells.iter().enumerate() { // Iterate genome.cells
+        for (i, cell) in genome.cells.iter().enumerate() { 
             // Op
             let op = cell.op as usize;
             if op < 17 {
@@ -138,7 +137,7 @@ impl ProbMatrix {
             }
             normalize(row);
         }
-        for row in &mut self.dir_b_probs { // Fixed typo here
+        for row in &mut self.dir_b_probs { 
             for p in row.iter_mut() {
                 *p = *p * (1.0 - amount) + uniform_dir * amount;
             }
@@ -281,22 +280,20 @@ impl GpuContext {
 
 fn main() {
     let mut rng = ChaCha8Rng::seed_from_u64(123);
-    println!("Initializing Grid Quine Search...");
+    println!("Initializing Grid Quine Search (8x8)...");
     let gpu = pollster::block_on(GpuContext::new());
     
     let mut prob_matrix = ProbMatrix::new();
+    
+    let mut population: Vec<Genome> = (0..POPULATION_SIZE)
+        .map(|_| prob_matrix.sample(&mut rng))
+        .collect();
     
     let mut gen = 0;
     let mut best_match = 0;
 
     loop {
         if gen >= 200 { break; } // Max 200 generations
-        
-            let mut population: Vec<Genome> = (0..POPULATION_SIZE)
-        
-                .map(|_| prob_matrix.sample(&mut rng))
-        
-                .collect();
         
         let results_packed = gpu.evaluate_batch(&population);
         
@@ -309,14 +306,14 @@ fn main() {
             let r1 = results_packed[i * 2 + 1];
             
             let mut score = 0;
-            for bit_idx in 0..16 {
-                let output_op = if bit_idx < 8 {
-                    (r0 >> (bit_idx * 4)) & 0xF
+            for cell_idx in 0..GENOME_SIZE {
+                let output_op = if cell_idx < 8 {
+                    (r0 >> (cell_idx * 4)) & 0xF
                 } else {
-                    (r1 >> ((bit_idx - 8) * 4)) & 0xF
+                    (r1 >> ((cell_idx - 8) * 4)) & 0xF
                 };
                 
-                let target_op = g.cells[bit_idx].op;
+                let target_op = g.cells[cell_idx].op;
                 
                 if target_op == 16 { // If VOID, output 0?
                     if output_op == 0 { score += 1; } // Treat 0 output as VOID match?
@@ -333,8 +330,8 @@ fn main() {
         
         if max_score > best_match {
             best_match = max_score;
-            println!("New Best: Gen {} | Score {} / 16", gen, best_match);
-            if best_match == 16 {
+            println!("New Best: Gen {} | Score {} / {}", gen, best_match, GENOME_SIZE);
+            if best_match == GENOME_SIZE {
                 println!("GRID QUINE SOLVED!");
                 print_grid(&population[best_idx]);
                 return;
@@ -342,7 +339,7 @@ fn main() {
         }
         
         if gen % 10 == 0 {
-            println!("Gen {} | Best: {} / 16 | Entropy: {:.2}", gen, max_score, prob_matrix.entropy());
+            println!("Gen {} | Best: {} / {} | Entropy: {:.2}", gen, max_score, GENOME_SIZE, prob_matrix.entropy());
         }
         
         // Elitism + Mutation
@@ -360,7 +357,7 @@ fn main() {
 }
 
 fn print_grid(genome: &Genome) {
-    println!("\n--- Organism Structure (4x4) ---");
+    println!("\n--- Organism Structure (8x8) ---");
     println!("Format: [Op A B]");
     println!("Op: 0-F (Logic), X (Void)");
     println!("Dirs: 0:N 1:NE 2:E 3:SE 4:S 5:SW 6:W 7:NW");
@@ -369,9 +366,9 @@ fn print_grid(genome: &Genome) {
     // Direction chars for visual clarity
     let dir_chars = ['↑', '↗', '→', '↘', '↓', '↙', '←', '↖'];
 
-    for y in 0..4 {
-        for x in 0..4 {
-            let idx = y * 4 + x;
+    for y in 0..8 { // Changed from 0..4
+        for x in 0..8 { // Changed from 0..4
+            let idx = y * 8 + x; // Changed from y * 4 + x
             let cell = &genome.cells[idx];
             let op_char = if cell.op < 16 { format!("{:X}", cell.op) } else { "X".to_string() };
             
