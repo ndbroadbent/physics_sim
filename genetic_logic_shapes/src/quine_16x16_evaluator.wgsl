@@ -20,6 +20,16 @@ const SIM_STEPS: u32 = 30u;
 const TEST_CASES: u32 = 256u;
 const RESULTS_U32S: u32 = 96u;  // 256 * 12 bits = 3072 bits = 96 u32s
 
+// Operation constants
+const OP_VOID: u32 = 16u;
+const OP_JUMP: u32 = 17u;
+
+// Jump direction constants (4-way cardinal)
+const JUMP_N: u32 = 0u;
+const JUMP_E: u32 = 1u;
+const JUMP_S: u32 = 2u;
+const JUMP_W: u32 = 3u;
+
 struct SimCell {
     op: u32,
     dir_a: u32,
@@ -48,6 +58,26 @@ fn get_neighbor_idx(idx: u32, dir: u32) -> u32 {
     if (dir == 3u || dir == 4u || dir == 5u) { dy = 1i; }
     if (dir == 1u || dir == 2u || dir == 3u) { dx = 1i; }
     if (dir == 5u || dir == 6u || dir == 7u) { dx = -1i; }
+
+    let nx = (x + dx + i32(GRID_DIM)) % i32(GRID_DIM);
+    let ny = (y + dy + i32(GRID_DIM)) % i32(GRID_DIM);
+    return u32(ny) * GRID_DIM + u32(nx);
+}
+
+/// Get jump target index for OP_JUMP cells
+/// dir_a = direction (0=N, 1=E, 2=S, 3=W)
+/// dir_b = distance (2, 3, or 4)
+fn get_jump_target_idx(idx: u32, direction: u32, distance: u32) -> u32 {
+    let x = i32(idx % GRID_DIM);
+    let y = i32(idx / GRID_DIM);
+    let dist = i32(distance);
+    var dx = 0i;
+    var dy = 0i;
+
+    if (direction == JUMP_N) { dy = -dist; }
+    else if (direction == JUMP_E) { dx = dist; }
+    else if (direction == JUMP_S) { dy = dist; }
+    else if (direction == JUMP_W) { dx = -dist; }
 
     let nx = (x + dx + i32(GRID_DIM)) % i32(GRID_DIM);
     let ny = (y + dy + i32(GRID_DIM)) % i32(GRID_DIM);
@@ -115,6 +145,7 @@ fn main(
             var res = 0u;
 
             if (cell.op < 16u) {
+                // Logic gate: read two neighbors, apply 4-bit LUT
                 let n_a = get_neighbor_idx(cell_idx, cell.dir_a);
                 let n_b = get_neighbor_idx(cell_idx, cell.dir_b);
 
@@ -124,7 +155,13 @@ fn main(
                 // 4-bit LUT: op encodes truth table
                 let lut_idx = (val_a << 1u) | val_b;
                 res = (cell.op >> lut_idx) & 1u;
+            } else if (cell.op == OP_JUMP) {
+                // Jump wire: read from distant cell
+                // dir_a = direction (N/E/S/W), dir_b = distance (2,3,4)
+                let jump_dest = get_jump_target_idx(cell_idx, cell.dir_a, cell.dir_b);
+                res = grid_a[jump_dest].state;
             }
+            // OP_VOID (16) and unknown ops output 0 (res already 0)
 
             // Input cells receive the test_cell index bits
             // Distribute 8 bits of test_cell across input cells

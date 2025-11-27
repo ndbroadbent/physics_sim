@@ -1,31 +1,31 @@
-// 2-bit Adder Evaluator
+// Full Adder Evaluator
 //
-// Tests if an organism can add two 2-bit numbers.
-// Input: 4 bits (A1 A0 B1 B0)
-// Output: 3 bits (S2 S1 S0) representing A + B
-//
-// 16 test cases: all combinations of 0-3 + 0-3
+// Input: 3 bits (A, B, Cin)
+// Output: 2 bits (Sum, Cout)
+// Sum = A XOR B XOR Cin
+// Cout = (A AND B) OR (Cin AND (A XOR B))
+// 8 test cases: all combinations
 
 struct Cell {
     op: u32,
     dir_a: u32,
     dir_b: u32,
-    flags: u32,  // bit 0: is_input, bit 1: is_output
+    flags: u32,
 }
 
 @group(0) @binding(0) var<storage, read> genomes: array<Cell>;
 @group(0) @binding(1) var<storage, read_write> results: array<u32>;
 
-const GRID_DIM: u32 = 8u;      // Smaller 8x8 grid for simpler problem
-const GENOME_SIZE: u32 = 64u;
-const SIM_STEPS: u32 = 20u;
-const TEST_CASES: u32 = 16u;   // 4x4 combinations
+const GRID_DIM: u32 = 6u;      // 6x6 grid for more room
+const GENOME_SIZE: u32 = 36u;
+const SIM_STEPS: u32 = 15u;
+const TEST_CASES: u32 = 8u;
 
 // Operation constants
 const OP_VOID: u32 = 16u;
 const OP_JUMP: u32 = 17u;
 
-// Jump direction constants (4-way cardinal)
+// Jump direction constants
 const JUMP_N: u32 = 0u;
 const JUMP_E: u32 = 1u;
 const JUMP_S: u32 = 2u;
@@ -39,19 +39,17 @@ struct SimCell {
     state: u32,
 }
 
-var<workgroup> grid_a: array<SimCell, 64>;
-var<workgroup> grid_b: array<u32, 64>;
+var<workgroup> grid_a: array<SimCell, 36>;
+var<workgroup> grid_b: array<u32, 36>;
 
-// Fixed I/O positions - no discovery needed
-// Inputs at top row: cells 0,1,2,3 (A0, A1, B0, B1)
-// Outputs at bottom row: cells 56,57,58 (S0, S1, S2)
-const INPUT_0: u32 = 0u;   // A0 at (0,0)
-const INPUT_1: u32 = 1u;   // A1 at (1,0)
-const INPUT_2: u32 = 2u;   // B0 at (2,0)
-const INPUT_3: u32 = 3u;   // B1 at (3,0)
-const OUTPUT_0: u32 = 56u; // S0 at (0,7)
-const OUTPUT_1: u32 = 57u; // S1 at (1,7)
-const OUTPUT_2: u32 = 58u; // S2 at (2,7)
+// Fixed I/O positions
+// Inputs at top row: cells 0,1,2 (A, B, Cin)
+// Outputs at bottom row: cells 30,31 (Sum, Cout)
+const INPUT_A: u32 = 0u;       // A at (0,0)
+const INPUT_B: u32 = 1u;       // B at (1,0)
+const INPUT_CIN: u32 = 2u;     // Cin at (2,0)
+const OUTPUT_SUM: u32 = 30u;   // Sum at (0,5)
+const OUTPUT_COUT: u32 = 31u;  // Cout at (1,5)
 
 fn get_neighbor_idx(idx: u32, dir: u32) -> u32 {
     let x = i32(idx % GRID_DIM);
@@ -87,7 +85,7 @@ fn get_jump_target_idx(idx: u32, direction: u32, distance: u32) -> u32 {
     return u32(ny) * GRID_DIM + u32(nx);
 }
 
-@compute @workgroup_size(64)
+@compute @workgroup_size(36)
 fn main(
     @builtin(workgroup_id) group_id: vec3<u32>,
     @builtin(local_invocation_id) local_id: vec3<u32>
@@ -96,7 +94,7 @@ fn main(
     let cell_idx = local_id.x;
     let genome_offset = genome_idx * GENOME_SIZE;
 
-    // Load genome into workgroup memory (ignore flags - we use fixed I/O positions)
+    // Load genome into workgroup memory
     let g_cell = genomes[genome_offset + cell_idx];
     grid_a[cell_idx] = SimCell(g_cell.op, g_cell.dir_a, g_cell.dir_b, 0u, 0u);
     workgroupBarrier();
@@ -104,12 +102,15 @@ fn main(
     // Accumulate correct bits across all test cases
     var correct_bits = 0u;
 
-    // Run test cases: all 16 combinations of 2-bit + 2-bit
+    // Run test cases: all 8 combinations of A, B, Cin
     for (var test = 0u; test < TEST_CASES; test++) {
-        // Decode test case: A = test / 4, B = test % 4
-        let a = test / 4u;
-        let b = test % 4u;
-        let expected_sum = a + b;  // 0-6
+        let a = (test >> 2u) & 1u;
+        let b = (test >> 1u) & 1u;
+        let cin = test & 1u;
+
+        // Full adder logic
+        let expected_sum = a ^ b ^ cin;
+        let expected_cout = (a & b) | (cin & (a ^ b));
 
         // Reset state
         grid_a[cell_idx].state = 0u;
@@ -134,11 +135,10 @@ fn main(
                 res = grid_a[jump_dest].state;
             }
 
-            // Fixed input cells receive bits: A0 A1 B0 B1
-            if (cell_idx == INPUT_0) { res = a & 1u; }
-            else if (cell_idx == INPUT_1) { res = (a >> 1u) & 1u; }
-            else if (cell_idx == INPUT_2) { res = b & 1u; }
-            else if (cell_idx == INPUT_3) { res = (b >> 1u) & 1u; }
+            // Fixed input cells receive the test bits
+            if (cell_idx == INPUT_A) { res = a; }
+            else if (cell_idx == INPUT_B) { res = b; }
+            else if (cell_idx == INPUT_CIN) { res = cin; }
 
             grid_b[cell_idx] = res;
             workgroupBarrier();
@@ -147,26 +147,22 @@ fn main(
             workgroupBarrier();
         }
 
-        // Check output from fixed output cells
+        // Check outputs
         if (cell_idx == 0u) {
-            let s0 = grid_a[OUTPUT_0].state & 1u;
-            let s1 = grid_a[OUTPUT_1].state & 1u;
-            let s2 = grid_a[OUTPUT_2].state & 1u;
-            let output_val = s0 | (s1 << 1u) | (s2 << 2u);
+            let actual_sum = grid_a[OUTPUT_SUM].state & 1u;
+            let actual_cout = grid_a[OUTPUT_COUT].state & 1u;
 
-            // Count correct bits (3 bits per test)
-            for (var bit = 0u; bit < 3u; bit++) {
-                let expected_bit = (expected_sum >> bit) & 1u;
-                let actual_bit = (output_val >> bit) & 1u;
-                if (expected_bit == actual_bit) {
-                    correct_bits += 1u;
-                }
+            if (actual_sum == expected_sum) {
+                correct_bits += 1u;
+            }
+            if (actual_cout == expected_cout) {
+                correct_bits += 1u;
             }
         }
         workgroupBarrier();
     }
 
-    // Store result: total correct bits (max = 16 tests * 3 bits = 48)
+    // Store result: total correct bits (max = 8 tests * 2 outputs = 16)
     if (cell_idx == 0u) {
         results[genome_idx] = correct_bits;
     }

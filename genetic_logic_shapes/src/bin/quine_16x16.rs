@@ -3,11 +3,16 @@
 //! Evolves organisms that can describe their own structure.
 //! Each cell has: op (4b), dir_a (3b), dir_b (3b), is_input (1b), is_output (1b)
 //! The organism must output its own 12-bit cell descriptors when queried.
+//!
+//! Key insight: Only ACTIVE cells (connected to outputs) need to be correct.
+//! "Junk DNA" that isn't connected to the output path doesn't matter.
+//! Outputs are constrained to the south edge for the "painting" metaphor.
 
 use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use std::borrow::Cow;
+use std::collections::HashSet;
 use wgpu::Maintain;
 
 const POPULATION_SIZE: usize = 8_000; // Limited by GPU buffer size
@@ -15,6 +20,7 @@ const GENOME_SIZE: usize = 256; // 16x16
 const GRID_DIM: usize = 16;
 const LEARNING_RATE: f32 = 0.05;
 const SIM_STEPS: usize = 30;
+const MIN_SOUTH_OUTPUTS: usize = 12; // Minimum outputs required (for 12-bit descriptor)
 
 // Results: 256 cells * 12 bits = 3072 bits = 96 u32s per genome
 const RESULTS_U32S_PER_GENOME: usize = 96;
@@ -356,11 +362,13 @@ impl GpuContext {
 }
 
 /// Calculate quine fitness for a genome given GPU results
-fn quine_fitness(genome: &Genome, results: &[u32]) -> (usize, usize) {
+/// Only checks ACTIVE cells (connected to outputs) - junk DNA is ignored
+fn quine_fitness(genome: &Genome, results: &[u32], active_cells: &HashSet<usize>) -> (usize, usize, usize) {
     let mut matches = 0;
     let mut total_bits_correct = 0;
+    let active_count = active_cells.len();
 
-    for cell_idx in 0..GENOME_SIZE {
+    for &cell_idx in active_cells {
         let expected = genome.cells[cell_idx].encode();
 
         // Extract 12-bit result from packed u32s
@@ -391,7 +399,7 @@ fn quine_fitness(genome: &Genome, results: &[u32]) -> (usize, usize) {
         }
     }
 
-    (matches, total_bits_correct)
+    (matches, total_bits_correct, active_count)
 }
 
 /// Count input and output cells in a genome
@@ -399,6 +407,73 @@ fn count_io(genome: &Genome) -> (usize, usize) {
     let inputs = genome.cells.iter().filter(|c| c.is_input()).count();
     let outputs = genome.cells.iter().filter(|c| c.is_output()).count();
     (inputs, outputs)
+}
+
+/// Get neighbor index given direction (0=N, 1=NE, 2=E, 3=SE, 4=S, 5=SW, 6=W, 7=NW)
+fn get_neighbor_idx(idx: usize, dir: u32) -> usize {
+    let x = (idx % GRID_DIM) as i32;
+    let y = (idx / GRID_DIM) as i32;
+    let (dx, dy) = match dir {
+        0 => (0, -1),  // N
+        1 => (1, -1),  // NE
+        2 => (1, 0),   // E
+        3 => (1, 1),   // SE
+        4 => (0, 1),   // S
+        5 => (-1, 1),  // SW
+        6 => (-1, 0),  // W
+        7 => (-1, -1), // NW
+        _ => (0, 0),
+    };
+    let nx = (x + dx).rem_euclid(GRID_DIM as i32) as usize;
+    let ny = (y + dy).rem_euclid(GRID_DIM as i32) as usize;
+    ny * GRID_DIM + nx
+}
+
+/// Trace active cells backward from outputs to inputs
+/// Returns a set of cell indices that are "live" (contribute to output)
+fn trace_active(genome: &Genome) -> HashSet<usize> {
+    let mut active_at_step: Vec<HashSet<usize>> = vec![HashSet::new(); SIM_STEPS + 1];
+    let mut globally_active = HashSet::new();
+
+    // Seed with output cells (south edge: y=15, x=0..15)
+    for x in 0..GRID_DIM {
+        let idx = 15 * GRID_DIM + x; // South edge
+        if genome.cells[idx].is_output() {
+            active_at_step[SIM_STEPS].insert(idx);
+        }
+    }
+
+    // Propagate backward through time
+    for t in (1..=SIM_STEPS).rev() {
+        let current_active: Vec<usize> = active_at_step[t].iter().cloned().collect();
+        for &idx in &current_active {
+            globally_active.insert(idx);
+
+            let cell = &genome.cells[idx];
+
+            // Input cells are sources - don't trace further
+            if cell.is_input() {
+                continue;
+            }
+
+            // If this cell computes (op < 16), trace to its inputs
+            if cell.op < 16 {
+                let na = get_neighbor_idx(idx, cell.dir_a);
+                let nb = get_neighbor_idx(idx, cell.dir_b);
+                active_at_step[t - 1].insert(na);
+                active_at_step[t - 1].insert(nb);
+            }
+        }
+    }
+
+    globally_active
+}
+
+/// Count how many south edge cells are outputs
+fn count_south_outputs(genome: &Genome) -> usize {
+    (0..GRID_DIM)
+        .filter(|&x| genome.cells[15 * GRID_DIM + x].is_output())
+        .count()
 }
 
 fn print_genome(genome: &Genome) {
@@ -433,9 +508,11 @@ fn print_genome(genome: &Genome) {
 }
 
 fn main() {
-    println!("=== 16x16 Quine Evolution ===");
+    println!("=== 16x16 Quine Evolution (Active Cells Only) ===");
     println!("Genome: 256 cells, 12 bits each (op + dirs + flags)");
-    println!("Goal: Organism outputs its own structure when queried\n");
+    println!("Requires minimum {} outputs on south edge", MIN_SOUTH_OUTPUTS);
+    println!("Only ACTIVE cells (connected to outputs) are scored");
+    println!("Junk DNA is ignored - only the live circuit matters\n");
 
     let mut rng = ChaCha8Rng::seed_from_u64(42);
 
@@ -443,9 +520,10 @@ fn main() {
     let mut prob_matrix = ProbMatrix::new();
 
     let mut best_ever_matches = 0;
-    let mut best_ever_bits = 0;
+    let mut best_ever_active = 0;
+    let mut best_ever_ratio = 0.0f32;
 
-    for gen in 0..500 {
+    for gen in 0..1000 {
         // Sample population from probability matrix
         let population: Vec<Genome> = (0..POPULATION_SIZE)
             .map(|_| prob_matrix.sample(&mut rng))
@@ -457,63 +535,86 @@ fn main() {
         // Find best genome
         let mut best_idx = 0;
         let mut best_matches = 0;
-        let mut best_bits = 0;
+        let mut best_active = 0;
+        let mut best_ratio = 0.0f32;
 
         for (i, g) in population.iter().enumerate() {
             let result_offset = i * RESULTS_U32S_PER_GENOME;
             let results = &all_results[result_offset..result_offset + RESULTS_U32S_PER_GENOME];
 
-            let (matches, bits) = quine_fitness(g, results);
+            // Count south edge outputs - must have at least MIN_SOUTH_OUTPUTS
+            let south_outputs = count_south_outputs(g);
+            if south_outputs < MIN_SOUTH_OUTPUTS {
+                continue; // Skip organisms with too few outputs
+            }
 
-            // Prefer more matches, then more bits correct
-            if matches > best_matches || (matches == best_matches && bits > best_bits) {
-                best_matches = matches;
-                best_bits = bits;
+            // Trace active cells from south edge outputs
+            let active_cells = trace_active(g);
+
+            // Skip if no active cells
+            if active_cells.is_empty() {
+                continue;
+            }
+
+            let (matches, bits, active_count) = quine_fitness(g, results, &active_cells);
+
+            // NEW FITNESS: Prefer more TOTAL bits correct (encourages larger circuits)
+            // Tie-break with more active cells (larger circuits can learn more)
+            if bits > best_matches || (bits == best_matches && active_count > best_active) {
+                best_matches = bits;
+                best_active = active_count;
+                best_ratio = matches as f32 / active_count as f32;
                 best_idx = i;
             }
         }
 
         // Update probability matrix with best genome
-        prob_matrix.update(&population[best_idx]);
+        if best_active > 0 {
+            prob_matrix.update(&population[best_idx]);
+        }
 
-        // Track best ever
+        // Track best ever (based on total bits correct)
         if best_matches > best_ever_matches
-            || (best_matches == best_ever_matches && best_bits > best_ever_bits)
+            || (best_matches == best_ever_matches && best_active > best_ever_active)
         {
             best_ever_matches = best_matches;
-            best_ever_bits = best_bits;
+            best_ever_active = best_active;
+            best_ever_ratio = best_ratio;
 
-            let (inputs, outputs) = count_io(&population[best_idx]);
+            let (inputs, _outputs) = count_io(&population[best_idx]);
+            let south_outputs = count_south_outputs(&population[best_idx]);
+            let total_bits = best_active * 12; // Total bits to match
             println!(
-                "NEW BEST Gen {} | Cells: {}/256 | Bits: {}/3072 | I/O: {}/{}",
-                gen, best_matches, best_bits, inputs, outputs
+                "NEW BEST Gen {} | {}/{} bits ({:.1}%) | Active: {} | South: {} | In: {}",
+                gen, best_matches, total_bits, 100.0 * best_matches as f32 / total_bits as f32,
+                best_active, south_outputs, inputs
             );
 
-            if best_matches >= 250 {
+            if best_ratio >= 0.95 && best_active >= 20 {
                 println!("\n*** QUINE NEARLY SOLVED! ***");
                 print_genome(&population[best_idx]);
             }
 
-            if best_matches == 256 {
+            if best_ratio == 1.0 && best_active >= 30 {
                 println!("\n*** PERFECT QUINE! ***");
                 print_genome(&population[best_idx]);
                 return;
             }
         }
 
-        if gen % 10 == 0 {
-            let (inputs, outputs) = count_io(&population[best_idx]);
+        if gen % 20 == 0 {
+            let (inputs, _outputs) = count_io(&population[best_idx]);
+            let south_outputs = count_south_outputs(&population[best_idx]);
+            let total_bits = best_active * 12;
             println!(
-                "Gen {:3} | Best: {}/256 cells, {}/3072 bits | I/O: {}/{} | Entropy: {:.1}",
-                gen,
-                best_matches,
-                best_bits,
-                inputs,
-                outputs,
-                prob_matrix.entropy()
+                "Gen {:4} | {}/{} bits ({:.1}%) | Active: {} | South: {} | In: {} | Entropy: {:.1}",
+                gen, best_matches, total_bits, 100.0 * best_matches as f32 / total_bits.max(1) as f32,
+                best_active, south_outputs, inputs, prob_matrix.entropy()
             );
         }
     }
 
-    println!("\nEvolution complete. Best: {}/256 cells correct", best_ever_matches);
+    let total_bits = best_ever_active * 12;
+    println!("\nEvolution complete. Best: {}/{} bits ({:.1}%)",
+             best_ever_matches, total_bits, 100.0 * best_ever_matches as f32 / total_bits.max(1) as f32);
 }
