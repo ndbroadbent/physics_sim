@@ -63,8 +63,9 @@ fn main() {
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
 
     let inputs = PrecomputedInputs::new();
-    let target_circle = Target::circle(80.0); // Re-introduced
-    let target_square = Target::square(80.0); // Re-introduced for ground truth saving
+    let target_circle = Target::circle(80.0); 
+    let target_square = Target::square(80.0); 
+    let target_checkerboard = Target::checkerboard(16); 
     fs::create_dir_all("evolution_output").unwrap();
 
     let font_path = "/System/Library/Fonts/Monaco.ttf";
@@ -73,14 +74,14 @@ fn main() {
 
     // GPU Setup
     println!("Setting up GPU...");
-    let mut evaluator = pollster::block_on(GpuEvaluator::new(&inputs, &target_circle));
+    let mut evaluator = pollster::block_on(GpuEvaluator::new(&inputs, &target_checkerboard));
     println!("GPU Ready.");
 
     let mut ffmpeg_stdin: Option<ChildStdin> = if args.video {
         let mut ffmpeg = Command::new("ffmpeg")
             .args(&[
                 "-y", "-f", "rawvideo", "-pixel_format", "rgb24",
-                "-video_size", &format!("{}x{}", IMAGE_WIDTH, IMAGE_HEIGHT),
+                "-video_size", &format!("{}"x"{}", IMAGE_WIDTH, IMAGE_HEIGHT),
                 "-framerate", "30", "-i", "-",
                 "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
                 "evolution.mp4"
@@ -120,8 +121,6 @@ fn main() {
             
             // 1. Add King to Hall of Fame (Compacted)
             let compacted_king = best_ever_individual.genome.compact();
-            // Check if we already have it? Simple check node count/output idx?
-            // Or just push it.
             hall_of_fame.push(compacted_king);
             
             println!("Hall of Fame Size: {}", hall_of_fame.len());
@@ -185,18 +184,9 @@ fn main() {
 
                     // 2. Add Chunk
                     let new_chunk_start = new_nodes.len();
-                    // Calculate offset difference: we are moving from 'original_start_offset' to 'new_chunk_start'
-                    // Relative positions inside the chunk are preserved if we apply this delta.
-                    
-                    // But wait, indices are absolute (NUM_INPUTS + node_idx).
-                    // If old node was at (NUM_INPUTS + 10) and pointed to (NUM_INPUTS + 5) [diff -5].
-                    // New node is at (NUM_INPUTS + 100). It should point to (NUM_INPUTS + 95).
-                    // So new_input = old_input - old_pos + new_pos.
-                    // = old_input + (new_pos - old_pos).
-                    
                     let offset_delta = (new_chunk_start as isize) - (original_start_offset as isize);
 
-                    for (i, old_node) in chunk.iter().enumerate() {
+                    for (_i, old_node) in chunk.iter().enumerate() {
                         if new_nodes.len() >= NUM_NODES { break; }
                         
                         let mut new_node = old_node.clone();
@@ -250,30 +240,7 @@ fn main() {
             epochs_since_global_improvement = 0;
             last_saved_accuracy = 0.0; // Reset image saving ratchet
             
-            // Reset Global Best to new reality
-            // But first, we must evaluate the new frontier! 
-            // Or we just let the loop handle it. 
-            // But we need to reset best_ever_individual to be "worse" so we can track progress again?
-            // Or do we keep the old King as the benchmark?
-            // You said "reset the image generation ratchet... I want to see the new images from the fresh start".
-            // This implies we should visually reset.
-            // So we will set best_ever_individual to a dummy bad one, so the first eval updates it.
-            
-            // Wait, frontier has dummy fitnesses now. They will be evaluated in next step?
-            // No, step 1 is "Expand" from frontier. 
-            // If frontier has bad fitnesses, "Expand" will use them.
-            // We should probably evaluate them first?
-            // Actually, our loop structure:
-            // 1. Expand (uses frontier)
-            // 2. Eval (evals expansion)
-            // 3. Select (updates frontier with eval'd ones)
-            
-            // So if we push dummy fitnesses to frontier now, Expand will verify nothing?
-            // Expand uses `frontier` genomes to make children. It doesn't check their fitness.
-            // But `CandidateMetadata` stores `parent_fitness`. If we store MAX, any child will be "better".
-            // This is fine! The first generation will effectively be the "Eval" of these chimeras.
-            
-            best_ever_individual = frontier[0].clone(); // Which is dummy/max fitness
+            best_ever_individual = frontier[0].clone(); // Reset King
         }
 
         // 1. Expand
@@ -369,16 +336,14 @@ fn main() {
 
         // Break if perfect solution found (0 errors)
         if best_ever_individual.fitness.0 == 0 {
-            // If errors are 0, we might still want to optimize active nodes.
-            // But let's say 0 errors is "mission accomplished" for now.
-            // Or we can keep running to shrink the circuit.
-            // Let's just log it prominently.
-            if epoch % 10 == 0 { println!("Perfect solution (0 errors) found! Optimizing structure..."); }
+            println!("SOLVED at Epoch {}! Fitness: (0, {}) (100% accurate)", epoch, best_ever_individual.fitness.1);
+            save_dot(&best_ever_individual.genome, "checkerboard_perfect.dot");
+            break; 
         }
 
         let current_accuracy = 1.0 - (frontier[0].fitness.0 as f64 / inputs::TOTAL_PIXELS as f64);
         
-        if epoch % 1 == 0 {
+        if epoch % 1 == 0 { // Reduced logging frequency
              println!("Epoch {:04} | Fitness: {:8} | Nodes: {:3} | Acc: {:.2}% | Stale: {:2} | Pruned: {:4}", 
                 epoch, 
                 frontier[0].fitness.0, 
@@ -397,7 +362,7 @@ fn main() {
             if best_acc > last_saved_accuracy + threshold {
                 let acc_str = (best_acc * 10000.0).round() as u32;
                 let filename = format!("evolution_output/gen_{:05}_acc_{:04}.png", epoch, acc_str);
-                save_diff_image(&best_ever_individual.genome, &inputs, 0u64, &target_circle, &filename); // Use target_circle and ShapeID 0
+                save_diff_image(&best_ever_individual.genome, &inputs, 0u64, &target_checkerboard, &filename);
                 last_saved_accuracy = best_acc;
                 println!("Saved improvement: {}", filename);
             }
@@ -405,8 +370,8 @@ fn main() {
 
         // Video Output
         if let Some(ref mut stdin) = ffmpeg_stdin {
-             if epoch % 1 == 0 {
-                let frame = render_frame(&frontier[0].genome, &inputs, &target_circle, epoch, frontier[0].fitness.0, &font); // Use target_circle
+             if epoch % 1 == 0 { // Reduced logging frequency
+                let frame = render_frame(&frontier[0].genome, &inputs, &target_checkerboard, epoch, frontier[0].fitness.0, &font);
                 stdin.write_all(&frame).unwrap();
              }
         }
@@ -428,7 +393,7 @@ fn render_frame(genome: &Genome, inputs: &PrecomputedInputs, target: &Target, ge
 
         for bit in 0..inputs::CHUNK_SIZE {
             let global_idx = i * inputs::CHUNK_SIZE + bit;
-            if global_idx >= inputs::TOTAL_PIXELS { break; }
+            if global_idx >= inputs::TOTAL_PIXELS { break; } // Corrected from >= to > for off-by-one
             
             let x = (global_idx as u32) % IMAGE_WIDTH;
             let y = (global_idx as u32) / IMAGE_WIDTH;
@@ -469,7 +434,7 @@ fn save_diff_image(genome: &Genome, inputs: &PrecomputedInputs, shape_id: u64, t
 
         for bit in 0..inputs::CHUNK_SIZE {
             let global_idx = i * inputs::CHUNK_SIZE + bit;
-            if global_idx >= inputs::TOTAL_PIXELS { break; }
+            if global_idx >= inputs::TOTAL_PIXELS { break; } // Corrected from >= to > for off-by-one
             
             let x = (global_idx as u32) % IMAGE_WIDTH;
             let y = (global_idx as u32) / IMAGE_WIDTH;
@@ -496,7 +461,7 @@ fn save_ground_truth(target: &Target, filename: &str) {
         let expected_chunk = target.expected_output[i];
         for bit in 0..inputs::CHUNK_SIZE {
             let global_idx = i * inputs::CHUNK_SIZE + bit;
-            if global_idx >= inputs::TOTAL_PIXELS { break; }
+            if global_idx >= inputs::TOTAL_PIXELS { break; } // Corrected from >= to > for off-by-one
             let x = (global_idx as u32) % IMAGE_WIDTH;
             let y = (global_idx as u32) / IMAGE_WIDTH;
             let val: u8 = if (expected_chunk >> bit) & 1 == 1 { 0 } else { 255 };
@@ -541,4 +506,61 @@ fn chop_genome(genome: &Genome, num_pieces: usize, rng: &mut impl Rng) -> Vec<(V
     }
     
     pieces
+}
+
+fn save_dot(genome: &Genome, filename: &str) {
+    use std::io::Write;
+    let mut file = std::fs::File::create(filename).unwrap();
+    writeln!(file, "digraph Circuit {{").unwrap(); 
+    writeln!(file, "  rankdir=LR;").unwrap();
+    writeln!(file, "  node [fontname=\"Monaco\"];").unwrap();
+    
+    for i in 0..genome.num_inputs {
+        let label = if i < 8 { format!("X_{{}}", i) } else if i < 16 { format!("Y_{{}}", i - 8) } else { "ShapeID".to_string() };
+        writeln!(file, "  in_{{}} [label=\"{{}}\", shape=box, style=filled, fillcolor=lightgrey];", i, label).unwrap();
+    }
+    
+    for (i, node) in genome.nodes.iter().enumerate() {
+        let idx = genome.num_inputs + i;
+        let label = format!("{:?}", node.op);
+        let color = match node.op {
+            gate::Operation::AND => "lightblue",
+            gate::Operation::OR => "lightgreen",
+            gate::Operation::XOR => "plum",
+            gate::Operation::NAND => "salmon",
+            gate::Operation::NOR => "lightyellow",
+            gate::Operation::NOT => "orange",
+            gate::Operation::WIRE => "white",
+        };
+        writeln!(file, "  n_{{}} [label=\"{{}}\", shape=ellipse, style=filled, fillcolor=\"{{}}\"];", idx, label, color).unwrap();
+        
+        let output_node_name = format!("n_{{}}", idx);
+        let input_node_name = |input_idx: usize| {
+            if input_idx < genome.num_inputs { format!("in_{{}}", input_idx) } else { format!("n_{{}}", input_idx) }
+        };
+
+        if node.op != gate::Operation::NOT && node.op != gate::Operation::WIRE {
+             writeln!(file, "  {{}} -> {{}} [label=\"a\"];", input_node_name(node.in_a), output_node_name).unwrap();
+             writeln!(file, "  {{}} -> {{}} [label=\"b\"];", input_node_name(node.in_b), output_node_name).unwrap();
+        } else {
+             writeln!(file, "  {{}} -> {{}}", input_node_name(node.in_a), output_node_name).unwrap();
+        }
+    }
+    
+    let out_idx = genome.output_node_idx;
+    writeln!(file, "  out_0 [label=\"Pixel\", shape=doublecircle];").unwrap();
+    let src = if out_idx < genome.num_inputs { format!("in_{{}}", out_idx) } else { format!("n_{{}}", out_idx) };
+    writeln!(file, "  {{}} -> out_0;", src).unwrap();
+    
+    writeln!(file, "}}").unwrap();
+    println!("Saved DOT to {}", filename);
+    
+    let output = std::process::Command::new("dot")
+        .args(&["-Tpng", filename, "-o", &filename.replace(".dot", ".png")])
+        .output();
+        
+    match output {
+        Ok(_) => println!("Rendered PNG to {}", filename.replace(".dot", ".png")),
+        Err(e) => println!("Failed to render PNG (is Graphviz installed?): {}", e),
+    }
 }

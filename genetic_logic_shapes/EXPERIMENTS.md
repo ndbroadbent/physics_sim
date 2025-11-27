@@ -9,3 +9,11 @@
   - input 2 => 4
   - and so on.
 - Add two 4 bit numbers
+
+- add more gate types, especially unary ones - identity, NOT, true, false
+- experiment with different probabilities for different gate types. e.g. sprinkle in only a few true and false gates.
+- attraction/repulsion forces:
+  - certain types of gates could have 'polarity' based on their truth tables. e.g. NAND and NOR are inverses of each other, and complementary to OR and AND. Gates that generally produce 1s could be considered positively charged, and gates that generally produce 0s could be considered negatively charged.
+- self-replication - find groupings of gates that emit their own configuration into a "bitfield"
+  - what is the "space"?
+  - what is the minimum number of bits to encode the graph?
