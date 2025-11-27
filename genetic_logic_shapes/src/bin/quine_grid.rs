@@ -201,7 +201,8 @@ impl GpuContext {
         let genomes_size = (POPULATION_SIZE * GENOME_SIZE * std::mem::size_of::<Cell>()) as u64;
         let genomes_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: Some("Genomes"), size: genomes_size, usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
 
-        let results_size = (POPULATION_SIZE * 2 * 4) as u64;
+        // 8 u32s per genome (64 cells * 4 bits = 256 bits = 8 u32s)
+        let results_size = (POPULATION_SIZE * 8 * 4) as u64;
         let results_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: Some("Results"), size: results_size, usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let staging_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: Some("Staging"), size: results_size, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
 
@@ -216,7 +217,7 @@ impl GpuContext {
         
         self.queue.write_buffer(&self.genomes_buffer, 0, bytemuck::cast_slice(&raw_genomes));
         
-        let zeros = vec![0u8; POPULATION_SIZE * 2 * 4];
+        let zeros = vec![0u8; POPULATION_SIZE * 8 * 4];
         self.queue.write_buffer(&self.results_buffer, 0, &zeros);
 
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -237,7 +238,7 @@ impl GpuContext {
             cpass.dispatch_workgroups(POPULATION_SIZE as u32, 1, 1);
         }
 
-        encoder.copy_buffer_to_buffer(&self.results_buffer, 0, &self.staging_buffer, 0, (POPULATION_SIZE * 2 * 4) as u64);
+        encoder.copy_buffer_to_buffer(&self.results_buffer, 0, &self.staging_buffer, 0, (POPULATION_SIZE * 8 * 4) as u64);
         self.queue.submit(Some(encoder.finish()));
 
         let buffer_slice = self.staging_buffer.slice(..);
@@ -291,33 +292,34 @@ fn main() {
         let mut best_active_count = 0;
         
         for (i, g) in population.iter().enumerate() {
-            let r_offset = i * 2;
-            let r_u32s = &results_packed[r_offset..r_offset+2];
-            
+            // 8 u32s per genome (64 cells * 4 bits = 256 bits)
+            let r_offset = i * 8;
+            let r_u32s = &results_packed[r_offset..r_offset + 8];
+
             // Trace Active
             let active_map = trace_active(g, &io_config);
             let mut active_cells = 0;
             let mut matches = 0;
-            
+
             for cell_idx in 0..GENOME_SIZE {
                 // Map genome cell to grid index
                 let org_x = cell_idx % 8;
                 let org_y = cell_idx / 8;
                 let grid_idx = (4 + org_y) * 16 + (4 + org_x);
-                
+
                 if !active_map[grid_idx] { continue; }
-                
+
                 active_cells += 1;
-                
-                let output_op = if cell_idx < 8 {
-                    (r_u32s[0] >> (cell_idx * 4)) & 0xF
-                } else {
-                    (r_u32s[1] >> ((cell_idx - 8) * 4)) & 0xF
-                };
-                
+
+                // Extract output from packed results: each cell's result is 4 bits
+                // word_idx = cell_idx / 8, bit_shift = (cell_idx % 8) * 4
+                let word_idx = cell_idx / 8;
+                let bit_shift = (cell_idx % 8) * 4;
+                let output_op = (r_u32s[word_idx] >> bit_shift) & 0xF;
+
                 let target_op = g.cells[cell_idx].op;
                 let effective_target = if target_op == 16 { 0 } else { target_op };
-                
+
                 if output_op == effective_target { matches += 1; }
             }
             
@@ -361,30 +363,42 @@ fn main() {
     }
 }
 
-fn trace_active(genome: &Genome, io_config: &IOConfig) -> Vec<bool> {
+fn trace_active(genome: &Genome, _io_config: &IOConfig) -> Vec<bool> {
     let mut active_at_step = vec![HashSet::new(); SIM_STEPS + 1];
     let mut globally_active = vec![false; GRID_SIZE];
-    
-    // Seed with Output Ports
-    for &out_idx in &io_config.outputs {
-        active_at_step[SIM_STEPS].insert(out_idx as usize);
+
+    // Seed with Quine Output Ports (row BELOW organism: y=12, x=4..7)
+    // (4,12) -> 12*16+4 = 196, (5,12) -> 197, (6,12) -> 198, (7,12) -> 199
+    for out_idx in 196..=199 {
+        active_at_step[SIM_STEPS].insert(out_idx);
     }
     
     // Propagate
     for t in (1..=SIM_STEPS).rev() {
-        // Clone to avoid double borrow
         let current_active: Vec<usize> = active_at_step[t].iter().cloned().collect();
         for &idx in &current_active {
             globally_active[idx] = true;
-            
-            // Map to organism
+
             let x = idx % 16;
             let y = idx / 16;
-            
-            let mut op = 16;
-            let mut dir_a = 0;
-            let mut dir_b = 0;
-            
+
+            // Output ports (y=12, x=4..7) read from the cell directly above (north)
+            // These are VOID cells that passively read state, so trace to their north neighbor
+            if y == 12 && x >= 4 && x < 8 {
+                let north_idx = (y - 1) * 16 + x; // y=11, same x
+                active_at_step[t - 1].insert(north_idx);
+                continue;
+            }
+
+            // Check Input - row ABOVE organism (y=3, x=4..9) = 6 input bits
+            let is_input = y == 3 && x >= 4 && x < 10;
+            if is_input { continue; }
+
+            // Map to organism
+            let mut op = 16u32;
+            let mut dir_a = 0u32;
+            let mut dir_b = 0u32;
+
             if x >= 4 && x < 12 && y >= 4 && y < 12 {
                 let org_x = x - 4;
                 let org_y = y - 4;
@@ -394,17 +408,12 @@ fn trace_active(genome: &Genome, io_config: &IOConfig) -> Vec<bool> {
                 dir_a = cell.dir_a;
                 dir_b = cell.dir_b;
             }
-            
-            // Check Input
-            let mut is_input = false;
-            for &inp in &io_config.inputs { if inp as usize == idx { is_input = true; break; } }
-            if is_input { continue; }
-            
+
             if op < 16 {
                 let na = get_neighbor_idx(idx as i32, dir_a);
                 let nb = get_neighbor_idx(idx as i32, dir_b);
-                active_at_step[t-1].insert(na);
-                active_at_step[t-1].insert(nb);
+                active_at_step[t - 1].insert(na);
+                active_at_step[t - 1].insert(nb);
             }
         }
     }
