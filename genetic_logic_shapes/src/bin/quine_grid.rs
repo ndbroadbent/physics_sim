@@ -7,6 +7,7 @@ use rand::Rng;
 use wgpu::Maintain;
 use std::borrow::Cow;
 use std::collections::HashSet;
+use wgpu::util::DeviceExt;
 
 const POPULATION_SIZE: usize = 50000;
 const GENOME_SIZE: usize = 64; // 8x8
@@ -180,8 +181,7 @@ impl GpuContext {
             entries: &
                 [
                     wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                    wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                    wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
                 ],
         });
 
@@ -200,12 +200,6 @@ impl GpuContext {
 
         let genomes_size = (POPULATION_SIZE * GENOME_SIZE * std::mem::size_of::<Cell>()) as u64;
         let genomes_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: Some("Genomes"), size: genomes_size, usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
-
-        let io_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("IO Config"),
-            contents: bytemuck::bytes_of(io_config),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
 
         let results_size = (POPULATION_SIZE * 2 * 4) as u64;
         let results_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: Some("Results"), size: results_size, usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
@@ -231,8 +225,7 @@ impl GpuContext {
             entries: &
                 [
                     wgpu::BindGroupEntry { binding: 0, resource: self.genomes_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 1, resource: self.io_buffer.as_entire_binding() }, // Use io_buffer
-                    wgpu::BindGroupEntry { binding: 2, resource: self.results_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: self.results_buffer.as_entire_binding() },
                 ],
         });
 
@@ -292,9 +285,10 @@ fn main() {
         
         let results_packed = gpu.evaluate_batch(&population);
         
-        let mut next_gen = Vec::with_capacity(POPULATION_SIZE);
+        let mut next_gen: Vec<Genome> = Vec::with_capacity(POPULATION_SIZE);
         let mut best_idx = 0;
         let mut max_score = 0;
+        let mut best_active_count = 0;
         
         for (i, g) in population.iter().enumerate() {
             let r_offset = i * 2;
@@ -348,6 +342,7 @@ fn main() {
             if score > max_score {
                 max_score = score;
                 best_idx = i;
+                best_active_count = active_cells;
             }
         }
         
@@ -357,7 +352,9 @@ fn main() {
         }
         
         if gen % 10 == 0 {
-            println!("Gen {} | Best Active Match: {} | Entropy: {:.2}", gen, max_score, prob_matrix.entropy());
+            println!("Gen {} | Best Match: {} / {} Active | Entropy: {:.2}", gen, max_score, best_active_count, prob_matrix.entropy());
+            println!("Best Genome Structure:");
+            print_grid(&population[best_idx]);
         }
         
         gen += 1;
