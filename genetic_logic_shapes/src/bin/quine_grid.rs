@@ -4,17 +4,15 @@ mod gate_universal;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use rand::Rng;
-use wgpu::Maintain; // Used in GpuContext::evaluate_batch
-use std::borrow::Cow; // Used in GpuContext::new for shader source
+use wgpu::Maintain;
+use std::borrow::Cow;
+use std::collections::HashSet;
 
-const POPULATION_SIZE: usize = 10000;
-const GENOME_SIZE: usize = 64; // 8x8 Organism size
+const POPULATION_SIZE: usize = 50000;
+const GENOME_SIZE: usize = 64; // 8x8
 const LEARNING_RATE: f32 = 0.05;
-
-// Constants from shader (used for logic in main)
-const SHADER_ORG_DIM: u32 = 8;   // The 8x8 organism
-const SHADER_SIM_STEPS: u32 = 20; 
-const SHADER_TEST_CASES: u32 = 64; // Number of cells to query (0..63)
+const GRID_SIZE: usize = 256;
+const SIM_STEPS: usize = 20;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -30,12 +28,19 @@ struct Genome {
     cells: Vec<Cell>,
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct IOConfig {
+    inputs: [u32; 8],
+    outputs: [u32; 8],
+}
+
 impl Genome {
     fn new_random(rng: &mut impl Rng) -> Self {
         let mut cells = Vec::with_capacity(GENOME_SIZE);
         for _ in 0..GENOME_SIZE {
             cells.push(Cell {
-                op: rng.gen_range(0..17), // 0-15 Logic, 16 Void
+                op: rng.gen_range(0..17),
                 dir_a: rng.gen_range(0..8),
                 dir_b: rng.gen_range(0..8),
                 _pad: 0,
@@ -59,9 +64,9 @@ impl Genome {
 }
 
 struct ProbMatrix {
-    op_probs: Vec<Vec<f32>>, // [GENOME_SIZE][17]
-    dir_a_probs: Vec<Vec<f32>>, // [GENOME_SIZE][8]
-    dir_b_probs: Vec<Vec<f32>>, // [GENOME_SIZE][8]
+    op_probs: Vec<Vec<f32>>,
+    dir_a_probs: Vec<Vec<f32>>,
+    dir_b_probs: Vec<Vec<f32>>,
 }
 
 impl ProbMatrix {
@@ -69,7 +74,7 @@ impl ProbMatrix {
         let op_uniform = 1.0 / 17.0;
         let dir_uniform = 1.0 / 8.0;
         ProbMatrix {
-            op_probs: vec![vec![op_uniform; 17]; GENOME_SIZE], 
+            op_probs: vec![vec![op_uniform; 17]; GENOME_SIZE],
             dir_a_probs: vec![vec![dir_uniform; 8]; GENOME_SIZE],
             dir_b_probs: vec![vec![dir_uniform; 8]; GENOME_SIZE],
         }
@@ -77,7 +82,7 @@ impl ProbMatrix {
 
     fn sample(&self, rng: &mut impl Rng) -> Genome {
         let mut cells = Vec::with_capacity(GENOME_SIZE);
-        for i in 0..GENOME_SIZE { 
+        for i in 0..GENOME_SIZE {
             let op = sample_discrete(&self.op_probs[i], rng);
             let dir_a = sample_discrete(&self.dir_a_probs[i], rng);
             let dir_b = sample_discrete(&self.dir_b_probs[i], rng);
@@ -86,26 +91,21 @@ impl ProbMatrix {
         Genome { cells }
     }
 
-    fn update(&mut self, genome: &Genome) { 
+    fn update(&mut self, genome: &Genome) {
         let one_minus = 1.0 - LEARNING_RATE;
-        for (i, cell) in genome.cells.iter().enumerate() { 
-            // Op
+        for (i, cell) in genome.cells.iter().enumerate() {
             let op = cell.op as usize;
             if op < 17 {
                 for p in &mut self.op_probs[i] { *p *= one_minus; }
                 self.op_probs[i][op] += LEARNING_RATE;
                 normalize(&mut self.op_probs[i]);
             }
-            
-            // Dir A
             let da = cell.dir_a as usize;
             if da < 8 {
                 for p in &mut self.dir_a_probs[i] { *p *= one_minus; }
                 self.dir_a_probs[i][da] += LEARNING_RATE;
                 normalize(&mut self.dir_a_probs[i]);
             }
-
-            // Dir B
             let db = cell.dir_b as usize;
             if db < 8 {
                 for p in &mut self.dir_b_probs[i] { *p *= one_minus; }
@@ -119,30 +119,6 @@ impl ProbMatrix {
         let mut e = 0.0;
         for row in &self.op_probs { e += calc_entropy(row); }
         e
-    }
-    
-    fn inject_noise(&mut self, amount: f32) {
-        let uniform_op = 1.0 / 17.0;
-        let uniform_dir = 1.0 / 8.0;
-        
-        for row in &mut self.op_probs {
-            for p in row.iter_mut() {
-                *p = *p * (1.0 - amount) + uniform_op * amount;
-            }
-            normalize(row);
-        }
-        for row in &mut self.dir_a_probs {
-            for p in row.iter_mut() {
-                *p = *p * (1.0 - amount) + uniform_dir * amount;
-            }
-            normalize(row);
-        }
-        for row in &mut self.dir_b_probs { 
-            for p in row.iter_mut() {
-                *p = *p * (1.0 - amount) + uniform_dir * amount;
-            }
-            normalize(row);
-        }
     }
 }
 
@@ -171,7 +147,6 @@ fn calc_entropy(probs: &[f32]) -> f32 {
     h
 }
 
-
 struct GpuContext {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -183,7 +158,7 @@ struct GpuContext {
 }
 
 impl GpuContext {
-    async fn new() -> Self {
+    async fn new(io_config: &IOConfig) -> Self {
         let instance = wgpu::Instance::default();
         let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions::default()).await.unwrap();
         let (device, queue) = adapter.request_device(
@@ -202,10 +177,12 @@ impl GpuContext {
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Bind Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-            ],
+            entries: &
+                [
+                    wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                ],
         });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -224,7 +201,13 @@ impl GpuContext {
         let genomes_size = (POPULATION_SIZE * GENOME_SIZE * std::mem::size_of::<Cell>()) as u64;
         let genomes_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: Some("Genomes"), size: genomes_size, usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
 
-        let results_size = (POPULATION_SIZE * 2 * 4) as u64; // 2 u32s per genome
+        let io_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("IO Config"),
+            contents: bytemuck::bytes_of(io_config),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+
+        let results_size = (POPULATION_SIZE * 2 * 4) as u64;
         let results_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: Some("Results"), size: results_size, usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let staging_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: Some("Staging"), size: results_size, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
 
@@ -245,10 +228,12 @@ impl GpuContext {
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: self.genomes_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: self.results_buffer.as_entire_binding() },
-            ],
+            entries: &
+                [
+                    wgpu::BindGroupEntry { binding: 0, resource: self.genomes_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: self.io_buffer.as_entire_binding() }, // Use io_buffer
+                    wgpu::BindGroupEntry { binding: 2, resource: self.results_buffer.as_entire_binding() },
+                ],
         });
 
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -256,7 +241,6 @@ impl GpuContext {
             let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
             cpass.set_pipeline(&self.pipeline);
             cpass.set_bind_group(0, &bind_group, &[]);
-            // 1 Workgroup per Genome
             cpass.dispatch_workgroups(POPULATION_SIZE as u32, 1, 1);
         }
 
@@ -266,7 +250,7 @@ impl GpuContext {
         let buffer_slice = self.staging_buffer.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
         buffer_slice.map_async(wgpu::MapMode::Read, move |v| tx.send(v).unwrap());
-        self.device.poll(wgpu::Maintain::Wait);
+        self.device.poll(Maintain::Wait);
         rx.recv().unwrap().unwrap();
 
         let data = buffer_slice.get_mapped_range();
@@ -280,20 +264,31 @@ impl GpuContext {
 
 fn main() {
     let mut rng = ChaCha8Rng::seed_from_u64(123);
-    println!("Initializing Grid Quine Search (8x8)...");
-    let gpu = pollster::block_on(GpuContext::new());
+    let mut indices: Vec<u32> = (0..256).collect();
+    for i in (1..indices.len()).rev() {
+        let j = rng.gen_range(0..=i);
+        indices.swap(i, j);
+    }
+    let mut inputs = [0u32; 8];
+    let mut outputs = [0u32; 8];
+    for i in 0..8 { inputs[i] = indices[i]; }
+    for i in 0..8 { outputs[i] = indices[8+i]; }
     
+    let io_config = IOConfig { inputs, outputs };
+    
+    println!("Inputs: {:?}", inputs);
+    println!("Outputs: {:?}", outputs);
+
+    let gpu = pollster::block_on(GpuContext::new(&io_config));
     let mut prob_matrix = ProbMatrix::new();
-    
-    let mut population: Vec<Genome> = (0..POPULATION_SIZE)
-        .map(|_| prob_matrix.sample(&mut rng))
-        .collect();
     
     let mut gen = 0;
     let mut best_match = 0;
 
     loop {
-        if gen >= 200 { break; } // Max 200 generations
+        if gen >= 200 { break; }
+        
+        let population: Vec<Genome> = (0..POPULATION_SIZE).map(|_| prob_matrix.sample(&mut rng)).collect();
         
         let results_packed = gpu.evaluate_batch(&population);
         
@@ -302,23 +297,51 @@ fn main() {
         let mut max_score = 0;
         
         for (i, g) in population.iter().enumerate() {
-            let r0 = results_packed[i * 2];
-            let r1 = results_packed[i * 2 + 1];
+            let r_offset = i * 2;
+            let r_u32s = &results_packed[r_offset..r_offset+2];
             
-            let mut score = 0;
+            // Trace Active
+            let active_map = trace_active(g, &io_config);
+            let mut active_cells = 0;
+            let mut matches = 0;
+            
             for cell_idx in 0..GENOME_SIZE {
+                // Map genome cell to grid index
+                let org_x = cell_idx % 8;
+                let org_y = cell_idx / 8;
+                let grid_idx = (4 + org_y) * 16 + (4 + org_x);
+                
+                if !active_map[grid_idx] { continue; }
+                
+                active_cells += 1;
+                
                 let output_op = if cell_idx < 8 {
-                    (r0 >> (cell_idx * 4)) & 0xF
+                    (r_u32s[0] >> (cell_idx * 4)) & 0xF
                 } else {
-                    (r1 >> ((cell_idx - 8) * 4)) & 0xF
+                    (r_u32s[1] >> ((cell_idx - 8) * 4)) & 0xF
                 };
                 
                 let target_op = g.cells[cell_idx].op;
+                let effective_target = if target_op == 16 { 0 } else { target_op };
                 
-                if target_op == 16 { // If VOID, output 0?
-                    if output_op == 0 { score += 1; } // Treat 0 output as VOID match?
-                } else {
-                    if output_op == target_op { score += 1; }
+                if output_op == effective_target { matches += 1; }
+            }
+            
+            if active_cells < 10 { continue; } 
+            
+            let score = matches; 
+            
+            if score == active_cells {
+                if active_cells > best_match {
+                    best_match = active_cells;
+                    best_idx = i;
+                    println!("New Best: Gen {} | Active Quine: {} / {} cells", gen, active_cells, active_cells);
+                    
+                    if active_cells >= 20 { 
+                        println!("GRID QUINE SOLVED!");
+                        print_grid(&population[best_idx]);
+                        return;
+                    }
                 }
             }
             
@@ -328,32 +351,87 @@ fn main() {
             }
         }
         
-        if max_score > best_match {
-            best_match = max_score;
-            println!("New Best: Gen {} | Score {} / {}", gen, best_match, GENOME_SIZE);
-            if best_match == GENOME_SIZE {
-                println!("GRID QUINE SOLVED!");
-                print_grid(&population[best_idx]);
-                return;
-            }
+        // Update matrix with best
+        if max_score > 0 {
+             prob_matrix.update(&population[best_idx]);
         }
         
         if gen % 10 == 0 {
-            println!("Gen {} | Best: {} / {} | Entropy: {:.2}", gen, max_score, GENOME_SIZE, prob_matrix.entropy());
+            println!("Gen {} | Best Active Match: {} | Entropy: {:.2}", gen, max_score, prob_matrix.entropy());
         }
         
-        // Elitism + Mutation
-        let best_g = population[best_idx].clone();
-        next_gen.push(best_g.clone());
-        for _ in 1..POPULATION_SIZE {
-            let mut child = best_g.clone();
-            child.mutate(0.05, &mut rng);
-            next_gen.push(child);
-        }
-        
-        population = next_gen;
         gen += 1;
     }
+}
+
+fn trace_active(genome: &Genome, io_config: &IOConfig) -> Vec<bool> {
+    let mut active_at_step = vec![HashSet::new(); SIM_STEPS + 1];
+    let mut globally_active = vec![false; GRID_SIZE];
+    
+    // Seed with Output Ports
+    for &out_idx in &io_config.outputs {
+        active_at_step[SIM_STEPS].insert(out_idx as usize);
+    }
+    
+    // Propagate
+    for t in (1..=SIM_STEPS).rev() {
+        // Clone to avoid double borrow
+        let current_active: Vec<usize> = active_at_step[t].iter().cloned().collect();
+        for &idx in &current_active {
+            globally_active[idx] = true;
+            
+            // Map to organism
+            let x = idx % 16;
+            let y = idx / 16;
+            
+            let mut op = 16;
+            let mut dir_a = 0;
+            let mut dir_b = 0;
+            
+            if x >= 4 && x < 12 && y >= 4 && y < 12 {
+                let org_x = x - 4;
+                let org_y = y - 4;
+                let org_idx = org_y * 8 + org_x;
+                let cell = &genome.cells[org_idx];
+                op = cell.op;
+                dir_a = cell.dir_a;
+                dir_b = cell.dir_b;
+            }
+            
+            // Check Input
+            let mut is_input = false;
+            for &inp in &io_config.inputs { if inp as usize == idx { is_input = true; break; } }
+            if is_input { continue; }
+            
+            if op < 16 {
+                let na = get_neighbor_idx(idx as i32, dir_a);
+                let nb = get_neighbor_idx(idx as i32, dir_b);
+                active_at_step[t-1].insert(na);
+                active_at_step[t-1].insert(nb);
+            }
+        }
+    }
+    globally_active
+}
+
+fn get_neighbor_idx(idx: i32, dir: u32) -> usize {
+    let x = idx % 16;
+    let y = idx / 16;
+    let mut dx = 0; let mut dy = 0;
+    match dir {
+        0 => { dx = 0; dy = -1; }
+        1 => { dx = 1; dy = -1; }
+        2 => { dx = 1; dy = 0; }
+        3 => { dx = 1; dy = 1; }
+        4 => { dx = 0; dy = 1; }
+        5 => { dx = -1; dy = 1; }
+        6 => { dx = -1; dy = 0; }
+        7 => { dx = -1; dy = -1; }
+        _ => {}
+    }
+    let nx = (x + dx + 16) % 16;
+    let ny = (y + dy + 16) % 16;
+    (ny * 16 + nx) as usize
 }
 
 fn print_grid(genome: &Genome) {
@@ -363,16 +441,14 @@ fn print_grid(genome: &Genome) {
     println!("Dirs: 0:N 1:NE 2:E 3:SE 4:S 5:SW 6:W 7:NW");
     println!("--------------------------------");
     
-    // Direction chars for visual clarity
     let dir_chars = ['↑', '↗', '→', '↘', '↓', '↙', '←', '↖'];
 
-    for y in 0..8 { // Changed from 0..4
-        for x in 0..8 { // Changed from 0..4
-            let idx = y * 8 + x; // Changed from y * 4 + x
+    for y in 0..8 {
+        for x in 0..8 {
+            let idx = y * 8 + x;
             let cell = &genome.cells[idx];
             let op_char = if cell.op < 16 { format!("{:X}", cell.op) } else { "X".to_string() };
             
-            // Check bounds before using as index
             let da_char = if cell.dir_a < 8 { dir_chars[cell.dir_a as usize] } else { '?' };
             let db_char = if cell.dir_b < 8 { dir_chars[cell.dir_b as usize] } else { '?' };
 
